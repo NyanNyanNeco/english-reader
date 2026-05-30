@@ -357,10 +357,10 @@
                   onClick={e => { e.stopPropagation(); onWordTap(clean, sentence.text); }}
                   style={{
                     cursor: 'pointer',
-                    borderRadius: 4,
-                    padding: '2px 4px',
-                    margin: '0 1px',
-                    display: 'inline-block',
+                    borderRadius: 3,
+                    padding: '1px 0',
+                    margin: 0,
+                    display: 'inline',
                     lineHeight: 'inherit',
                     background: isReg ? '#dff0e0' : 'transparent',
                     color: isReg ? '#2a7a4a' : 'inherit',
@@ -814,7 +814,7 @@
         <div style={{ minHeight:'100vh', background:C.bg, fontFamily:"'Georgia','Hiragino Mincho ProN','Yu Mincho',serif", color:C.dark }}>
           {/* Header */}
           <header style={{ background:C.dark, color:'#f5f0e8', padding:'0 20px', display:'flex', alignItems:'center', justifyContent:'space-between', height:54, position:'sticky', top:0, zIndex:100, boxShadow:'0 2px 12px rgba(0,0,0,0.3)' }}>
-            <span style={{ fontSize:16, letterSpacing:'0.1em' }}><span style={{ color:C.gold }}>ER</span> English Reader <span style={{ fontSize:10, color:C.muted, letterSpacing:'0.05em' }}>v1.1</span></span>
+            <span style={{ fontSize:16, letterSpacing:'0.1em' }}><span style={{ color:C.gold }}>ER</span> English Reader <span style={{ fontSize:10, color:C.muted, letterSpacing:'0.05em' }}>v1.2</span></span>
             <nav style={{ display:'flex', gap:2 }}>
               {navItems.map(({ key, label, Icon }) => (
                 <button key={key}
