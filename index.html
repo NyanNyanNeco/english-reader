@@ -320,25 +320,103 @@
     }
 
     // ─── Reader ───────────────────────────────────────────────────────────────
-    function ReaderScreen({ text, onOpenAnalysis, onRegisterWord, onImportJson }) {
-      const [selWord, setSelWord] = useState(null);
-      const [anchor, setAnchor] = useState({ x:0, y:0 });
-      const [toast, setToast] = useState('');
-      const importRef = useRef();
 
-      const handleMouseUp = useCallback((e, idx) => {
-        const sel = window.getSelection();
-        const w = sel ? sel.toString().trim() : '';
-        if (w.length > 0) { setSelWord({ word:w, idx }); setAnchor({ x:e.clientX, y:e.clientY }); }
-        else setSelWord(null);
-      }, []);
+    // 単語トークン分割（句読点を単語と分離）
+    function tokenize(text) {
+      // 単語と非単語（スペース・句読点）に分割
+      return text.match(/[A-Za-z''\-]+|[^A-Za-z''\-]+/g) || [text];
+    }
 
-      const handleClick = (idx) => {
-        if (window.getSelection()?.toString().trim()) return;
-        onOpenAnalysis(idx);
+    function isWord(token) {
+      return /[A-Za-z]/.test(token);
+    }
+
+    // 単語ごとにタップ登録できる文コンポーネント
+    function TappableSentence({ sentence, sentenceIdx, onWordTap, onSentenceTap, registered }) {
+      const [hoveredToken, setHoveredToken] = useState(null);
+      const tokens = tokenize(sentence.text);
+
+      const handleWordClick = (e, word) => {
+        e.stopPropagation();
+        onWordTap(word, sentence.text);
       };
 
+      return (
+        <div
+          style={{ display:'flex', gap:10, alignItems:'flex-start', padding:'9px 12px', borderRadius:4, marginBottom:3, border:`1px solid transparent`, lineHeight:2.0, fontSize:15, transition:'all 0.12s' }}
+          onMouseEnter={e => { e.currentTarget.style.background='#fdf5e4'; e.currentTarget.style.borderColor=C.border; }}
+          onMouseLeave={e => { e.currentTarget.style.background='transparent'; e.currentTarget.style.borderColor='transparent'; }}
+        >
+          <span
+            style={{ fontSize:10, color:C.gold, minWidth:20, paddingTop:6, userSelect:'none', flexShrink:0, cursor:'pointer' }}
+            onClick={onSentenceTap}
+          >{sentenceIdx+1}</span>
+          <span style={{ flex:1, userSelect:'none' }}>
+            {tokens.map((token, ti) => {
+              if (!isWord(token)) {
+                // スペース・句読点はそのまま
+                return <span key={ti}>{token}</span>;
+              }
+              const clean = token.replace(/^['']+|['']+$/g, ''); // 前後クォート除去
+              const isReg = registered.has(clean.toLowerCase());
+              const isHov = hoveredToken === ti;
+              return (
+                <span
+                  key={ti}
+                  onClick={e => handleWordClick(e, clean)}
+                  onMouseEnter={() => setHoveredToken(ti)}
+                  onMouseLeave={() => setHoveredToken(null)}
+                  style={{
+                    cursor: 'pointer',
+                    borderRadius: 3,
+                    padding: '1px 2px',
+                    margin: '0 -2px',
+                    background: isHov ? C.gold : isReg ? '#e8f4e8' : 'transparent',
+                    color: isHov ? C.dark : isReg ? '#2a7a4a' : 'inherit',
+                    borderBottom: isReg ? '1px solid #2a7a4a' : isHov ? 'none' : '1px dashed transparent',
+                    transition: 'all 0.1s',
+                    display: 'inline-block',
+                    lineHeight: 'inherit',
+                  }}
+                >
+                  {token}
+                </span>
+              );
+            })}
+            {(sentence.analysis||sentence.translation) && <span style={{ marginLeft:7, fontSize:10, color:C.gold, userSelect:'none' }}>✦</span>}
+          </span>
+          {/* 解説タップ領域（行末アイコン） */}
+          <span
+            onClick={onSentenceTap}
+            style={{ fontSize:11, color:C.border, paddingTop:5, cursor:'pointer', userSelect:'none', flexShrink:0, transition:'color 0.1s' }}
+            onMouseEnter={e => e.currentTarget.style.color=C.muted}
+            onMouseLeave={e => e.currentTarget.style.color=C.border}
+            title="解説を開く"
+          >☰</span>
+        </div>
+      );
+    }
+
+    function ReaderScreen({ text, onOpenAnalysis, onRegisterWord, onQuickRegister, onImportJson, registeredWords }) {
+      const [toast, setToast] = useState('');
+      const [tapWord, setTapWord] = useState(null); // {word, sourceSentence}
+      const importRef = useRef();
+
       const showToast = msg => { setToast(msg); setTimeout(() => setToast(''), 2500); };
+
+      // 登録済み単語セット（小文字）
+      const registered = new Set((registeredWords||[]).map(w => w.word.toLowerCase()));
+
+      const handleWordTap = (word, sourceSentence) => {
+        setTapWord({ word, sourceSentence });
+      };
+
+      const handleQuickRegister = () => {
+        if (!tapWord) return;
+        onQuickRegister(tapWord.word, tapWord.sourceSentence);
+        showToast(`「${tapWord.word}」を単語帳に登録しました ✦`);
+        setTapWord(null);
+      };
 
       // ChatGPT用テンプレートJSON出力（未解説の文のみ or 全文）
       const handleExportTemplate = (onlyBlank) => {
@@ -414,31 +492,47 @@
               {toast}
             </div>
           )}
+
           <div style={{ ...card, padding:'18px 20px' }}>
             <div style={{ fontSize:11, color:C.muted, marginBottom:12, letterSpacing:'0.08em' }}>
-              ▶ 文をタップ→解説　／　単語を長押し選択→単語帳登録
+              ▶ 単語をタップ→単語帳登録　／　行末 ☰ または番号をタップ→解説
             </div>
             {text.sentences.map((s, i) => (
-              <div key={i}
-                style={{ display:'flex', gap:10, alignItems:'flex-start', padding:'9px 12px', borderRadius:4, marginBottom:3, cursor:'pointer', border:`1px solid transparent`, lineHeight:1.9, fontSize:15, transition:'all 0.12s', userSelect:'text' }}
-                onClick={() => handleClick(i)}
-                onMouseUp={e => handleMouseUp(e, i)}
-                onMouseEnter={e => { e.currentTarget.style.background='#fdf5e4'; e.currentTarget.style.borderColor=C.border; }}
-                onMouseLeave={e => { e.currentTarget.style.background='transparent'; e.currentTarget.style.borderColor='transparent'; }}
-              >
-                <span style={{ fontSize:10, color:C.gold, minWidth:20, paddingTop:5, userSelect:'none', flexShrink:0 }}>{i+1}</span>
-                <span style={{ flex:1 }}>
-                  {s.text}
-                  {(s.analysis||s.translation) && <span style={{ marginLeft:7, fontSize:10, color:C.gold, userSelect:'none' }}>✦</span>}
-                </span>
-              </div>
+              <TappableSentence
+                key={i}
+                sentence={s}
+                sentenceIdx={i}
+                onWordTap={handleWordTap}
+                onSentenceTap={() => onOpenAnalysis(i)}
+                registered={registered}
+              />
             ))}
           </div>
 
-          {selWord && (
-            <div style={{ position:'fixed', top:anchor.y-54, left:Math.min(anchor.x-60, window.innerWidth-240), background:C.dark, color:'#f5f0e8', padding:'8px 14px', borderRadius:6, fontSize:13, cursor:'pointer', zIndex:300, boxShadow:'0 4px 20px rgba(0,0,0,0.3)', maxWidth:240 }}
-              onClick={() => { onRegisterWord(selWord.word, text.sentences[selWord.idx].text); setSelWord(null); window.getSelection()?.removeAllRanges(); }}>
-              ＋ 単語帳に登録: <strong>"{selWord.word}"</strong>
+          {/* ワンタップ登録パネル */}
+          {tapWord && (
+            <div style={{ position:'fixed', bottom:0, left:0, right:0, zIndex:350 }}>
+              {/* 背景タップで閉じる */}
+              <div style={{ position:'fixed', inset:0, zIndex:340 }} onClick={() => setTapWord(null)} />
+              <div style={{ position:'relative', zIndex:350, background:C.card, borderTop:`2px solid ${C.gold}`, padding:'16px 20px 24px', boxShadow:'0 -8px 32px rgba(0,0,0,0.18)' }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:10 }}>
+                  <div>
+                    <div style={{ fontSize:22, fontWeight:'bold', letterSpacing:'0.03em', marginBottom:3 }}>{tapWord.word}</div>
+                    <div style={{ fontSize:12, color:C.muted, lineHeight:1.5, maxWidth:480 }}>
+                      {tapWord.sourceSentence.length > 80 ? tapWord.sourceSentence.slice(0,80)+'…' : tapWord.sourceSentence}
+                    </div>
+                  </div>
+                  <button style={{ background:'none', border:'none', cursor:'pointer', color:C.muted, padding:4 }} onClick={() => setTapWord(null)}><Ico.X /></button>
+                </div>
+                <div style={{ display:'flex', gap:10 }}>
+                  <button style={{ ...btn.primary, flex:1, justifyContent:'center' }} onClick={handleQuickRegister}>
+                    <Ico.Star /> 単語帳に登録
+                  </button>
+                  <button style={{ ...btn.secondary }} onClick={() => { onRegisterWord(tapWord.word, tapWord.sourceSentence); setTapWord(null); }}>
+                    詳細入力
+                  </button>
+                </div>
+              </div>
             </div>
           )}
         </div>
@@ -683,6 +777,9 @@
         setWords(prev => [{ id:generateId(), word, meaning, sourceSentence, proficiency, registeredAt }, ...prev]);
         setWordDialog(null);
       };
+      const quickSaveWord = (word, sourceSentence) => {
+        setWords(prev => [{ id:generateId(), word, meaning:'', sourceSentence, proficiency:'未学習', registeredAt:nowIso() }, ...prev]);
+      };
       const updateWord = (updated, isNew) => {
         if (isNew) setWords(prev => [updated, ...prev]);
         else setWords(prev => prev.map(w => w.id===updated.id ? updated : w));
@@ -742,7 +839,7 @@
             {screen==='import' && <ImportScreen onSave={saveText} onNav={nav} />}
             {screen==='list'   && <ListScreen texts={texts} onNav={nav} onDelete={deleteText} />}
             {screen==='reader' && activeText && (
-              <ReaderScreen text={activeText} onOpenAnalysis={i=>setAnalysisIdx(i)} onRegisterWord={(w,s)=>setWordDialog({word:w,sourceSentence:s})} onImportJson={mergeJsonAnalysis} />
+              <ReaderScreen text={activeText} onOpenAnalysis={i=>setAnalysisIdx(i)} onRegisterWord={(w,s)=>setWordDialog({word:w,sourceSentence:s})} onQuickRegister={quickSaveWord} onImportJson={mergeJsonAnalysis} registeredWords={words} />
             )}
             {screen==='vocab'  && <VocabScreen words={words} onUpdate={updateWord} onDelete={deleteWord} />}
           </main>
