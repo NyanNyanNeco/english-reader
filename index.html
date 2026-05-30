@@ -212,8 +212,28 @@
         if (!body.trim()) return alert('英文を入力してください。');
         const sentences = splitSentences(body);
         const tmpl = {
-          _instruction: '各sentenceのanalysis（構文解説）とtranslation（日本語訳）を記入し、他フィールドは変更せずにJSONを返してください。',
-          _prompt: '以下の英文各文について①構文解説（S/V/O/C/Mを明示、分詞・関係詞等の説明）②日本語訳を記入してください。',
+          _instruction: '各sentenceのanalysis（構文解説）とtranslation（日本語訳）を記入し、他フィールドは変更せずにJSONを返してください。analysisは下記_promptの形式に従って記述してください。',
+          _prompt: `以下の英文各文について、analysisフィールドに下記の形式で構文解説を記入し、translationフィールドに日本語訳を記入してください。
+
+【analysisの記述形式】
+1行目: この文の文型（例: SVO、SVC など）を一言で説明する。
+続けて各要素を列挙:
+S (主語): 該当箇所 （日本語訳）
+V (動詞): 該当箇所 （補足: 時制・態など）
+O (目的語) / C (補語): 該当箇所 （日本語訳） ※該当する場合のみ
+修飾語: 該当箇所 （日本語訳） ※該当する場合のみ
+【ポイント】
+注目すべき語法・表現・文法事項を箇条書きで2〜4点記述する。
+例）
+この英文はSVO（主語＋動詞＋目的語）で構成されています。
+S (主語): A runner （一人のランナー）
+V (動詞): has finally broken （ついに破った）※現在完了形（結果）
+O (目的語): the two-hour barrier （2時間の壁）
+修飾語: for the marathon （マラソンにおける）
+【ポイント】
+finally: 「ついに」という意味で、長年の悲願達成を強調します。
+現在完了形 (has broken): 過去の出来事が現在も事実として残っているニュアンスを表します。
+barrier: 記録や達成が困難とされる「限界・基準」を比喩的に表す表現です。`,
           title: title || '（未入力）',
           source: source || '',
           sentences: sentences.map((s,i) => ({ id:i, text:s, analysis:'', translation:'' }))
@@ -645,8 +665,271 @@
       );
     }
 
+    // ─── Card Mode ────────────────────────────────────────────────────────────
+    function CardMode({ words, onUpdate }) {
+      const deck = words.filter(w => w.word && w.meaning);
+      const [idx, setIdx] = useState(0);
+      const [flipped, setFlipped] = useState(false);
+      const [filter, setFilter] = useState('すべて');
+      const [dir, setDir] = useState(null); // 'en→ja' | 'ja→en'
+      const [mode, setMode] = useState('en→ja');
+
+      const filtered = deck.filter(w => filter === 'すべて' || w.proficiency === filter);
+
+      useEffect(() => { setIdx(0); setFlipped(false); }, [filter, mode]);
+
+      if (filtered.length === 0) {
+        return (
+          <div style={{ ...card, textAlign:'center', padding:40, color:C.muted }}>
+            <div style={{ fontSize:32, marginBottom:10 }}>🃏</div>
+            <div>意味が入力された単語がありません。<br />単語帳に意味を登録してからご利用ください。</div>
+          </div>
+        );
+      }
+
+      const w = filtered[idx % filtered.length];
+      const front = mode === 'en→ja' ? w.word : w.meaning;
+      const back  = mode === 'en→ja' ? w.meaning : w.word;
+
+      const next = () => { setIdx(i => (i + 1) % filtered.length); setFlipped(false); };
+      const prev = () => { setIdx(i => (i - 1 + filtered.length) % filtered.length); setFlipped(false); };
+
+      const setProf = p => { onUpdate({ ...w, proficiency: p }); };
+
+      return (
+        <div>
+          {/* フィルタ・モード */}
+          <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:14 }}>
+            {['すべて','未学習','学習中','習得済み'].map(f => (
+              <button key={f} style={{ ...btn.ghost, borderColor:filter===f?C.gold:C.border, color:filter===f?C.brown:C.muted, background:filter===f?'#fdf5e4':'transparent', fontSize:11 }} onClick={() => setFilter(f)}>{f}</button>
+            ))}
+            <div style={{ marginLeft:'auto', display:'flex', gap:6 }}>
+              {['en→ja','ja→en'].map(m => (
+                <button key={m} style={{ ...btn.ghost, borderColor:mode===m?C.gold:C.border, color:mode===m?C.brown:C.muted, background:mode===m?'#fdf5e4':'transparent', fontSize:11 }} onClick={() => { setMode(m); setFlipped(false); }}>{m}</button>
+              ))}
+            </div>
+          </div>
+
+          {/* 進捗 */}
+          <div style={{ fontSize:12, color:C.muted, textAlign:'center', marginBottom:10 }}>{idx + 1} / {filtered.length}</div>
+
+          {/* カード */}
+          <div
+            onClick={() => setFlipped(f => !f)}
+            style={{ ...card, minHeight:200, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', cursor:'pointer', userSelect:'none', padding:32, textAlign:'center', position:'relative', transition:'box-shadow 0.15s', boxShadow: flipped ? '0 4px 20px rgba(200,169,110,0.4)' : '0 1px 4px rgba(0,0,0,0.06)', borderColor: flipped ? C.gold : C.border }}
+          >
+            <div style={{ fontSize:10, color:C.muted, marginBottom:12, letterSpacing:'0.1em' }}>{flipped ? (mode==='en→ja'?'意味':'英語') : (mode==='en→ja'?'英語':'意味')}</div>
+            <div style={{ fontSize: flipped ? 16 : 26, fontWeight: flipped ? 'normal' : 'bold', lineHeight:1.7, color: flipped ? C.brown : C.dark, maxWidth:380 }}>{flipped ? back : front}</div>
+            {!flipped && <div style={{ position:'absolute', bottom:12, fontSize:11, color:C.border }}>タップして意味を確認</div>}
+            {flipped && w.sourceSentence && (
+              <div style={{ marginTop:14, fontSize:12, color:C.muted, lineHeight:1.6, borderTop:`1px solid ${C.border}`, paddingTop:10, maxWidth:380 }}>
+                {w.sourceSentence.slice(0,90)}{w.sourceSentence.length>90?'…':''}
+              </div>
+            )}
+          </div>
+
+          {/* ナビ */}
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14 }}>
+            <button style={btn.secondary} onClick={prev}><Ico.Left /> 前へ</button>
+            <button style={btn.secondary} onClick={next}>次へ <Ico.Right /></button>
+          </div>
+
+          {/* 習熟度変更 */}
+          {flipped && (
+            <div style={{ ...card, padding:'12px 16px' }}>
+              <div style={{ fontSize:12, color:C.muted, marginBottom:8 }}>習熟度を更新</div>
+              <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+                {['未学習','学習中','習得済み'].map(p => (
+                  <button key={p} style={{ ...btn.secondary, borderColor:w.proficiency===p?C.gold:C.inputBorder, background:w.proficiency===p?'#fdf5e4':'transparent', flex:1, justifyContent:'center' }} onClick={() => setProf(p)}>{p}</button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ─── Quiz Mode ────────────────────────────────────────────────────────────
+    function QuizMode({ words }) {
+      const deck = words.filter(w => w.word && w.meaning);
+      const [filter, setFilter] = useState('すべて');
+      const [mode, setMode] = useState('en→ja'); // 'en→ja' | 'ja→en'
+      const [quizWords, setQuizWords] = useState(null);
+      const [qi, setQi] = useState(0);
+      const [answer, setAnswer] = useState('');
+      const [result, setResult] = useState(null); // null | 'correct' | 'wrong'
+      const [score, setScore] = useState({ correct:0, wrong:0 });
+      const [done, setDone] = useState(false);
+      const [choices, setChoices] = useState([]);
+      const [quizType, setQuizType] = useState('choice'); // 'choice' | 'type'
+
+      const filtered = deck.filter(w => filter === 'すべて' || w.proficiency === filter);
+
+      function shuffle(arr) {
+        const a = [...arr]; for (let i = a.length-1; i > 0; i--) { const j = Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a;
+      }
+
+      const startQuiz = () => {
+        if (filtered.length < 2) return alert('クイズには意味が入力された単語が2語以上必要です。');
+        setQuizWords(shuffle(filtered));
+        setQi(0); setScore({ correct:0, wrong:0 }); setResult(null); setAnswer(''); setDone(false);
+      };
+
+      useEffect(() => {
+        if (!quizWords) return;
+        const q = quizWords[qi];
+        if (!q) return;
+        const correct = mode==='en→ja' ? q.meaning : q.word;
+        const pool = filtered.filter(w => w.id !== q.id);
+        const wrong3 = shuffle(pool).slice(0,3).map(w => mode==='en→ja' ? w.meaning : w.word);
+        setChoices(shuffle([correct, ...wrong3]));
+        setAnswer(''); setResult(null);
+      }, [qi, quizWords]);
+
+      if (!quizWords) {
+        return (
+          <div>
+            <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:14 }}>
+              {['すべて','未学習','学習中','習得済み'].map(f => (
+                <button key={f} style={{ ...btn.ghost, borderColor:filter===f?C.gold:C.border, color:filter===f?C.brown:C.muted, background:filter===f?'#fdf5e4':'transparent', fontSize:11 }} onClick={() => setFilter(f)}>{f}</button>
+              ))}
+            </div>
+            <div style={{ display:'flex', gap:8, marginBottom:14 }}>
+              {['en→ja','ja→en'].map(m => (
+                <button key={m} style={{ ...btn.secondary, borderColor:mode===m?C.gold:C.inputBorder, background:mode===m?'#fdf5e4':'transparent' }} onClick={() => setMode(m)}>{m}</button>
+              ))}
+            </div>
+            <div style={{ display:'flex', gap:8, marginBottom:20 }}>
+              {[['choice','選択式'],['type','記述式']].map(([k,l]) => (
+                <button key={k} style={{ ...btn.secondary, borderColor:quizType===k?C.gold:C.inputBorder, background:quizType===k?'#fdf5e4':'transparent' }} onClick={() => setQuizType(k)}>{l}</button>
+              ))}
+            </div>
+            <div style={{ ...card, textAlign:'center', padding:32 }}>
+              <div style={{ fontSize:32, marginBottom:12 }}>📝</div>
+              <div style={{ fontSize:15, marginBottom:6 }}>対象: {filtered.length}語</div>
+              <div style={{ fontSize:12, color:C.muted, marginBottom:20 }}>モード: {mode}　形式: {quizType==='choice'?'選択式':'記述式'}</div>
+              {filtered.length < 2
+                ? <div style={{ color:C.muted, fontSize:13 }}>クイズには2語以上必要です。</div>
+                : <button style={{ ...btn.primary, margin:'0 auto' }} onClick={startQuiz}>クイズ開始</button>
+              }
+            </div>
+          </div>
+        );
+      }
+
+      if (done) {
+        const total = score.correct + score.wrong;
+        const pct = total > 0 ? Math.round(score.correct / total * 100) : 0;
+        return (
+          <div style={{ ...card, textAlign:'center', padding:40 }}>
+            <div style={{ fontSize:32, marginBottom:10 }}>{pct >= 80 ? '🎉' : pct >= 50 ? '👍' : '💪'}</div>
+            <div style={{ fontSize:20, fontWeight:'bold', marginBottom:8 }}>クイズ結果</div>
+            <div style={{ fontSize:28, color:C.gold, fontWeight:'bold', marginBottom:4 }}>{pct}%</div>
+            <div style={{ fontSize:13, color:C.muted, marginBottom:20 }}>{score.correct}問正解 / {total}問中</div>
+            <div style={{ display:'flex', gap:10, justifyContent:'center' }}>
+              <button style={btn.primary} onClick={startQuiz}>もう一度</button>
+              <button style={btn.secondary} onClick={() => setQuizWords(null)}>設定に戻る</button>
+            </div>
+          </div>
+        );
+      }
+
+      const q = quizWords[qi];
+      if (!q) return null;
+      const question = mode==='en→ja' ? q.word : q.meaning;
+      const correctAns = mode==='en→ja' ? q.meaning : q.word;
+
+      const handleChoice = (c) => {
+        if (result) return;
+        const ok = c === correctAns;
+        setResult(ok ? 'correct' : 'wrong');
+        setScore(s => ok ? { ...s, correct:s.correct+1 } : { ...s, wrong:s.wrong+1 });
+      };
+
+      const handleType = () => {
+        if (result) return;
+        const ok = answer.trim().toLowerCase() === correctAns.trim().toLowerCase();
+        setResult(ok ? 'correct' : 'wrong');
+        setScore(s => ok ? { ...s, correct:s.correct+1 } : { ...s, wrong:s.wrong+1 });
+      };
+
+      const goNext = () => {
+        if (qi + 1 >= quizWords.length) { setDone(true); return; }
+        setQi(i => i + 1);
+      };
+
+      const progressPct = Math.round(qi / quizWords.length * 100);
+
+      return (
+        <div>
+          {/* 進捗バー */}
+          <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:14 }}>
+            <div style={{ flex:1, height:4, background:C.border, borderRadius:2 }}>
+              <div style={{ width:`${progressPct}%`, height:'100%', background:C.gold, borderRadius:2, transition:'width 0.3s' }} />
+            </div>
+            <div style={{ fontSize:12, color:C.muted, whiteSpace:'nowrap' }}>{qi+1} / {quizWords.length}</div>
+            <div style={{ fontSize:12, color:'#2a7a4a' }}>✓{score.correct}</div>
+            <div style={{ fontSize:12, color:'#a05030' }}>✗{score.wrong}</div>
+          </div>
+
+          {/* 問題 */}
+          <div style={{ ...card, textAlign:'center', padding:'28px 20px', marginBottom:12 }}>
+            <div style={{ fontSize:11, color:C.muted, marginBottom:10 }}>{mode==='en→ja'?'次の英単語の意味は？':'次の意味の英単語は？'}</div>
+            <div style={{ fontSize:24, fontWeight:'bold', letterSpacing:'0.03em' }}>{question}</div>
+            {q.sourceSentence && result && (
+              <div style={{ marginTop:12, fontSize:12, color:C.muted, lineHeight:1.6 }}>{q.sourceSentence.slice(0,90)}{q.sourceSentence.length>90?'…':''}</div>
+            )}
+          </div>
+
+          {/* 選択肢 or 記述 */}
+          {quizType === 'choice' ? (
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:14 }}>
+              {choices.map((c, ci) => {
+                let bg = C.card; let bc = C.border; let col = C.dark;
+                if (result) {
+                  if (c === correctAns) { bg='#d8f0e0'; bc='#5ab87a'; col='#2a7a4a'; }
+                  else if (c !== correctAns && result==='wrong' && answer===c) { bg='#fde8e0'; bc='#d4905a'; col='#a05030'; }
+                }
+                return (
+                  <button key={ci}
+                    onClick={() => { setAnswer(c); handleChoice(c); }}
+                    style={{ padding:'12px 10px', borderRadius:6, border:`1.5px solid ${bc}`, background:bg, color:col, cursor:result?'default':'pointer', fontSize:13, lineHeight:1.5, textAlign:'left', fontFamily:'inherit' }}
+                  >{c}</button>
+                );
+              })}
+            </div>
+          ) : (
+            <div style={{ marginBottom:14 }}>
+              <input
+                style={{ ...inp, marginBottom:8 }}
+                value={answer}
+                onChange={e => setAnswer(e.target.value)}
+                onKeyDown={e => e.key==='Enter' && !result && handleType()}
+                placeholder={mode==='en→ja'?'意味を入力…':'英単語を入力…'}
+                disabled={!!result}
+                autoFocus
+              />
+              {!result && <button style={{ ...btn.primary, width:'100%', justifyContent:'center' }} onClick={handleType}>回答する</button>}
+              {result && (
+                <div style={{ padding:'10px 14px', borderRadius:6, background:result==='correct'?'#d8f0e0':'#fde8e0', border:`1px solid ${result==='correct'?'#5ab87a':'#d4905a'}`, color:result==='correct'?'#2a7a4a':'#a05030', fontSize:13 }}>
+                  {result==='correct' ? '✓ 正解！' : `✗ 不正解。正解: ${correctAns}`}
+                </div>
+              )}
+            </div>
+          )}
+
+          {result && (
+            <button style={{ ...btn.primary, width:'100%', justifyContent:'center' }} onClick={goNext}>
+              {qi+1 >= quizWords.length ? '結果を見る' : '次の問題 →'}
+            </button>
+          )}
+        </div>
+      );
+    }
+
     // ─── Vocab ────────────────────────────────────────────────────────────────
     function VocabScreen({ words, onUpdate, onDelete }) {
+      const [tab, setTab] = useState('list'); // 'list' | 'card' | 'quiz'
       const [search, setSearch] = useState('');
       const [filter, setFilter] = useState('すべて');
       const [detail, setDetail] = useState(null);
@@ -684,6 +967,17 @@
 
       return (
         <div>
+          {/* タブ */}
+          <div style={{ display:'flex', gap:0, marginBottom:16, borderBottom:`2px solid ${C.border}` }}>
+            {[['list','📋 一覧'],['card','🃏 カード'],['quiz','📝 クイズ']].map(([k,l]) => (
+              <button key={k} onClick={() => setTab(k)} style={{ padding:'8px 20px', border:'none', borderBottom:tab===k?`2px solid ${C.gold}`:'2px solid transparent', background:'transparent', color:tab===k?C.brown:C.muted, cursor:'pointer', fontFamily:'inherit', fontSize:13, fontWeight:tab===k?'bold':'normal', marginBottom:-2, letterSpacing:'0.04em' }}>{l}</button>
+            ))}
+          </div>
+
+          {tab === 'card' && <CardMode words={words} onUpdate={w => onUpdate(w, false)} />}
+          {tab === 'quiz' && <QuizMode words={words} />}
+
+          {tab === 'list' && <>
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14, flexWrap:'wrap', gap:8 }}>
             <p style={{ ...secTitle, margin:0 }}>単語帳（{words.length}語）</p>
             <div style={{ display:'flex', gap:8 }}>
@@ -750,6 +1044,7 @@
               </div>
             </div>
           )}
+          </>}
         </div>
       );
     }
@@ -823,7 +1118,7 @@
         <div style={{ minHeight:'100vh', background:C.bg, fontFamily:"'Georgia','Hiragino Mincho ProN','Yu Mincho',serif", color:C.dark }}>
           {/* Header */}
           <header style={{ background:C.dark, color:'#f5f0e8', padding:'0 20px', display:'flex', alignItems:'center', justifyContent:'space-between', height:54, position:'sticky', top:0, zIndex:100, boxShadow:'0 2px 12px rgba(0,0,0,0.3)' }}>
-            <span style={{ fontSize:16, letterSpacing:'0.1em' }}><span style={{ color:C.gold }}>ER</span> English Reader <span style={{ fontSize:10, color:C.muted, letterSpacing:'0.05em' }}>v1.3</span></span>
+            <span style={{ fontSize:16, letterSpacing:'0.1em' }}><span style={{ color:C.gold }}>ER</span> English Reader <span style={{ fontSize:10, color:C.muted, letterSpacing:'0.05em' }}>v1.5</span></span>
             <nav style={{ display:'flex', gap:2 }}>
               {navItems.map(({ key, label, Icon }) => (
                 <button key={key}
