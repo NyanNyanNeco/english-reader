@@ -333,62 +333,55 @@
 
     // 単語ごとにタップ登録できる文コンポーネント
     function TappableSentence({ sentence, sentenceIdx, onWordTap, onSentenceTap, registered }) {
-      const [hoveredToken, setHoveredToken] = useState(null);
       const tokens = tokenize(sentence.text);
 
-      const handleWordClick = (e, word) => {
-        e.stopPropagation();
-        onWordTap(word, sentence.text);
-      };
-
       return (
-        <div
-          style={{ display:'flex', gap:10, alignItems:'flex-start', padding:'9px 12px', borderRadius:4, marginBottom:3, border:`1px solid transparent`, lineHeight:2.0, fontSize:15, transition:'all 0.12s' }}
-          onMouseEnter={e => { e.currentTarget.style.background='#fdf5e4'; e.currentTarget.style.borderColor=C.border; }}
-          onMouseLeave={e => { e.currentTarget.style.background='transparent'; e.currentTarget.style.borderColor='transparent'; }}
-        >
+        <div style={{ display:'flex', gap:0, alignItems:'flex-start', padding:'6px 4px', borderRadius:4, marginBottom:3, lineHeight:2.1, fontSize:15, transition:'all 0.12s' }}>
+          {/* 番号：解説を開く */}
           <span
-            style={{ fontSize:10, color:C.gold, minWidth:20, paddingTop:6, userSelect:'none', flexShrink:0, cursor:'pointer' }}
             onClick={onSentenceTap}
+            style={{ fontSize:10, color:C.gold, minWidth:28, paddingTop:7, userSelect:'none', flexShrink:0, cursor:'pointer', textAlign:'center' }}
           >{sentenceIdx+1}</span>
+
+          {/* 単語トークン群 */}
           <span style={{ flex:1, userSelect:'none' }}>
             {tokens.map((token, ti) => {
               if (!isWord(token)) {
-                // スペース・句読点はそのまま
-                return <span key={ti}>{token}</span>;
+                return <span key={ti} style={{ whiteSpace:'pre-wrap' }}>{token}</span>;
               }
-              const clean = token.replace(/^['']+|['']+$/g, ''); // 前後クォート除去
+              const clean = token.replace(/^['']+|['']+$/g, '');
               const isReg = registered.has(clean.toLowerCase());
-              const isHov = hoveredToken === ti;
               return (
                 <span
                   key={ti}
-                  onClick={e => handleWordClick(e, clean)}
-                  onMouseEnter={() => setHoveredToken(ti)}
-                  onMouseLeave={() => setHoveredToken(null)}
+                  onClick={e => { e.stopPropagation(); onWordTap(clean, sentence.text); }}
                   style={{
                     cursor: 'pointer',
-                    borderRadius: 3,
-                    padding: '1px 2px',
-                    margin: '0 -2px',
-                    background: isHov ? C.gold : isReg ? '#e8f4e8' : 'transparent',
-                    color: isHov ? C.dark : isReg ? '#2a7a4a' : 'inherit',
-                    borderBottom: isReg ? '1px solid #2a7a4a' : isHov ? 'none' : '1px dashed transparent',
-                    transition: 'all 0.1s',
+                    borderRadius: 4,
+                    padding: '2px 4px',
+                    margin: '0 1px',
                     display: 'inline-block',
                     lineHeight: 'inherit',
+                    background: isReg ? '#dff0e0' : 'transparent',
+                    color: isReg ? '#2a7a4a' : 'inherit',
+                    borderBottom: isReg ? '2px solid #5ab87a' : '2px solid transparent',
+                    transition: 'background 0.12s',
+                    WebkitTapHighlightColor: 'rgba(200,169,110,0.35)',
                   }}
+                  onMouseEnter={e => { e.currentTarget.style.background = isReg ? '#c8ecd2' : '#faecd0'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = isReg ? '#dff0e0' : 'transparent'; }}
                 >
                   {token}
                 </span>
               );
             })}
-            {(sentence.analysis||sentence.translation) && <span style={{ marginLeft:7, fontSize:10, color:C.gold, userSelect:'none' }}>✦</span>}
+            {(sentence.analysis||sentence.translation) && <span style={{ marginLeft:6, fontSize:10, color:C.gold, userSelect:'none' }}>✦</span>}
           </span>
-          {/* 解説タップ領域（行末アイコン） */}
+
+          {/* 解説ボタン */}
           <span
             onClick={onSentenceTap}
-            style={{ fontSize:11, color:C.border, paddingTop:5, cursor:'pointer', userSelect:'none', flexShrink:0, transition:'color 0.1s' }}
+            style={{ fontSize:13, color:C.border, padding:'6px 8px', cursor:'pointer', userSelect:'none', flexShrink:0, lineHeight:2 }}
             onMouseEnter={e => e.currentTarget.style.color=C.muted}
             onMouseLeave={e => e.currentTarget.style.color=C.border}
             title="解説を開く"
@@ -495,7 +488,7 @@
 
           <div style={{ ...card, padding:'18px 20px' }}>
             <div style={{ fontSize:11, color:C.muted, marginBottom:12, letterSpacing:'0.08em' }}>
-              ▶ 単語をタップ→単語帳登録　／　行末 ☰ または番号をタップ→解説
+              ▶ 単語をタップ → 単語帳登録パネル表示　／　番号・☰ をタップ → 解説
             </div>
             {text.sentences.map((s, i) => (
               <TappableSentence
