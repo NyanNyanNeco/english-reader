@@ -147,7 +147,7 @@
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:20 }}>
             {[
               { label:'保存英文', value:texts.length, unit:'本' },
-              { label:'登録単語', value:words.length, unit:'語' },
+              { label:'登録単語・フレーズ', value:words.length, unit:'件' },
             ].map(({ label, value, unit }) => (
               <div key={label} style={{ ...card, textAlign:'center', marginBottom:0, padding:'16px 12px' }}>
                 <div style={{ fontSize:28, fontWeight:'bold', color:C.gold }}>{value}</div>
@@ -351,9 +351,29 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
       return /[A-Za-z]/.test(token);
     }
 
-    // 単語ごとにタップ登録できる文コンポーネント
+    // 単語ごとにタップ登録できる文コンポーネント（イディオム選択対応）
     function TappableSentence({ sentence, sentenceIdx, onWordTap, onSentenceTap, registered }) {
       const tokens = tokenize(sentence.text);
+      const spanRef = useRef(null);
+
+      // ポインターアップ時にテキスト選択を検出（イディオム用）
+      const handlePointerUp = useCallback((e) => {
+        setTimeout(() => {
+          const sel = window.getSelection();
+          if (!sel || sel.isCollapsed) return;
+          const selectedText = sel.toString().trim();
+          // 複数単語 or ハイフン入りなどをイディオムとして検出
+          const words = selectedText.split(/\s+/).filter(w => /[A-Za-z]/.test(w));
+          if (words.length < 2) return; // 単語1つはシングルタップで処理
+          // 選択範囲がこの文の中にあるか確認
+          if (!spanRef.current) return;
+          const range = sel.getRangeAt(0);
+          if (!spanRef.current.contains(range.commonAncestorContainer)) return;
+          e.stopPropagation();
+          onWordTap(selectedText, sentence.text, 'idiom');
+          sel.removeAllRanges();
+        }, 30);
+      }, [sentence.text, onWordTap]);
 
       return (
         <div style={{ display:'flex', gap:0, alignItems:'flex-start', padding:'6px 4px', borderRadius:4, marginBottom:3, lineHeight:2.1, fontSize:15, transition:'all 0.12s' }}>
@@ -364,17 +384,24 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
           >{sentenceIdx+1}</span>
 
           {/* 単語トークン群 */}
-          <span style={{ flex:1, userSelect:'none' }}>
+          <span ref={spanRef} style={{ flex:1, userSelect:'text' }} onPointerUp={handlePointerUp}>
             {tokens.map((token, ti) => {
               if (!isWord(token)) {
                 return <span key={ti} style={{ whiteSpace:'pre-wrap' }}>{token}</span>;
               }
               const clean = token.replace(/^['']+|['']+$/g, '');
               const isReg = registered.has(clean.toLowerCase());
+              const isRegIdiom = [...registered].some(r => r.includes(' ') && r.toLowerCase().includes(clean.toLowerCase()));
               return (
                 <span
                   key={ti}
-                  onClick={e => { e.stopPropagation(); onWordTap(clean, sentence.text); }}
+                  onClick={e => {
+                    // 選択中は単語タップをスキップ
+                    const sel = window.getSelection();
+                    if (sel && !sel.isCollapsed) return;
+                    e.stopPropagation();
+                    onWordTap(clean, sentence.text, 'word');
+                  }}
                   style={{
                     cursor: 'pointer',
                     borderRadius: 3,
@@ -412,7 +439,7 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
 
     function ReaderScreen({ text, onOpenAnalysis, onRegisterWord, onQuickRegister, onImportJson, registeredWords }) {
       const [toast, setToast] = useState('');
-      const [tapWord, setTapWord] = useState(null); // {word, sourceSentence}
+      const [tapWord, setTapWord] = useState(null); // {word, sourceSentence, type: 'word'|'idiom'}
       const importRef = useRef();
 
       const showToast = msg => { setToast(msg); setTimeout(() => setToast(''), 2500); };
@@ -420,13 +447,13 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
       // 登録済み単語セット（小文字）
       const registered = new Set((registeredWords||[]).map(w => w.word.toLowerCase()));
 
-      const handleWordTap = (word, sourceSentence) => {
-        setTapWord({ word, sourceSentence });
+      const handleWordTap = (word, sourceSentence, type = 'word') => {
+        setTapWord({ word, sourceSentence, type, meaning: '' });
       };
 
       const handleQuickRegister = () => {
         if (!tapWord) return;
-        onQuickRegister(tapWord.word, tapWord.sourceSentence);
+        onQuickRegister(tapWord.word, tapWord.sourceSentence, tapWord.type || 'word', tapWord.meaning || '');
         showToast(`「${tapWord.word}」を単語帳に登録しました ✦`);
         setTapWord(null);
       };
@@ -508,7 +535,7 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
 
           <div style={{ ...card, padding:'18px 20px' }}>
             <div style={{ fontSize:11, color:C.muted, marginBottom:12, letterSpacing:'0.08em' }}>
-              ▶ 単語をタップ → 単語帳登録パネル表示　／　番号・☰ をタップ → 解説
+              ▶ 単語をタップ → 登録パネル表示　／　フレーズをドラッグ選択 → イディオム登録　／　番号・☰ → 解説
             </div>
             {text.sentences.map((s, i) => (
               <TappableSentence
@@ -527,22 +554,31 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
             <div style={{ position:'fixed', bottom:0, left:0, right:0, zIndex:350 }}>
               {/* 背景タップで閉じる */}
               <div style={{ position:'fixed', inset:0, zIndex:340 }} onClick={() => setTapWord(null)} />
-              <div style={{ position:'relative', zIndex:350, background:C.card, borderTop:`2px solid ${C.gold}`, padding:'16px 20px 24px', boxShadow:'0 -8px 32px rgba(0,0,0,0.18)' }}>
+              <div style={{ position:'relative', zIndex:350, background:C.card, borderTop:`2px solid ${tapWord.type==='idiom'?'#7a6aaa':C.gold}`, padding:'16px 20px 20px', boxShadow:'0 -8px 32px rgba(0,0,0,0.18)' }}>
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:10 }}>
                   <div>
-                    <div style={{ fontSize:22, fontWeight:'bold', letterSpacing:'0.03em', marginBottom:3 }}>{tapWord.word}</div>
+                    <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:3 }}>
+                      <div style={{ fontSize:22, fontWeight:'bold', letterSpacing:'0.03em' }}>{tapWord.word}</div>
+                      {tapWord.type === 'idiom' && (
+                        <span style={{ fontSize:10, background:'#7a6aaa', color:'#fff', padding:'2px 8px', borderRadius:20, letterSpacing:'0.08em', fontWeight:'bold' }}>イディオム</span>
+                      )}
+                    </div>
                     <div style={{ fontSize:12, color:C.muted, lineHeight:1.5, maxWidth:480 }}>
                       {tapWord.sourceSentence.length > 80 ? tapWord.sourceSentence.slice(0,80)+'…' : tapWord.sourceSentence}
                     </div>
                   </div>
                   <button style={{ background:'none', border:'none', cursor:'pointer', color:C.muted, padding:4 }} onClick={() => setTapWord(null)}><Ico.X /></button>
                 </div>
+                {/* 意味入力欄 */}
+                <input
+                  style={{ ...inp, marginBottom:10, fontSize:13 }}
+                  value={tapWord.meaning}
+                  onChange={e => setTapWord(tw => ({ ...tw, meaning: e.target.value }))}
+                  placeholder="意味を入力（省略可）"
+                />
                 <div style={{ display:'flex', gap:10 }}>
-                  <button style={{ ...btn.primary, flex:1, justifyContent:'center' }} onClick={handleQuickRegister}>
+                  <button style={{ ...btn.primary, flex:1, justifyContent:'center', background: tapWord.type==='idiom'?'#4a3a7a':C.dark }} onClick={handleQuickRegister}>
                     <Ico.Star /> 単語帳に登録
-                  </button>
-                  <button style={{ ...btn.secondary }} onClick={() => { onRegisterWord(tapWord.word, tapWord.sourceSentence); setTapWord(null); }}>
-                    詳細入力
                   </button>
                 </div>
               </div>
@@ -633,9 +669,10 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
     }
 
     // ─── Word Dialog ──────────────────────────────────────────────────────────
-    function WordDialog({ word, sourceSentence, onSave, onClose }) {
+    function WordDialog({ word, sourceSentence, type, onSave, onClose }) {
       const [meaning, setMeaning] = useState('');
       const [prof, setProf] = useState('未学習');
+      const isIdiom = type === 'idiom';
       return (
         <div style={overlay}>
           <div style={{ ...modalBox, maxWidth:460 }}>
@@ -643,11 +680,14 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
               <span style={{ fontSize:11, color:C.muted }}>単語帳に登録</span>
               <button style={{ background:'none', border:'none', cursor:'pointer', color:C.muted }} onClick={onClose}><Ico.X /></button>
             </div>
-            <div style={{ fontSize:20, fontWeight:'bold', marginBottom:10 }}>{word}</div>
+            <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
+              <div style={{ fontSize:20, fontWeight:'bold' }}>{word}</div>
+              {isIdiom && <span style={{ fontSize:10, background:'#7a6aaa', color:'#fff', padding:'2px 8px', borderRadius:20, letterSpacing:'0.08em' }}>イディオム</span>}
+            </div>
             <div style={{ fontSize:12, color:C.muted, marginBottom:14, padding:'8px 10px', background:'#f5ede0', borderRadius:4, lineHeight:1.7 }}>{sourceSentence}</div>
             <div style={{ marginBottom:14 }}>
-              <label style={lbl}>意味・解説</label>
-              <textarea style={{ ...tex, minHeight:80 }} value={meaning} onChange={e=>setMeaning(e.target.value)} placeholder="意味を入力（後から編集可）" />
+              <label style={lbl}>{isIdiom ? 'イディオムの意味・用法' : '意味・解説'}</label>
+              <textarea style={{ ...tex, minHeight:80 }} value={meaning} onChange={e=>setMeaning(e.target.value)} placeholder={isIdiom ? '例: take it for granted（〜を当然のことと思う）' : '意味を入力（後から編集可）'} />
             </div>
             <div style={{ marginBottom:20 }}>
               <label style={lbl}>習熟度</label>
@@ -657,7 +697,7 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
                 ))}
               </div>
             </div>
-            <button style={btn.primary} onClick={() => onSave({ word, meaning, sourceSentence, proficiency:prof, registeredAt:nowIso() })}>
+            <button style={{ ...btn.primary, background: isIdiom?'#4a3a7a':C.dark }} onClick={() => onSave({ word, meaning, sourceSentence, proficiency:prof, registeredAt:nowIso(), type: type||'word' })}>
               <Ico.Star /> 登録する
             </button>
           </div>
@@ -979,7 +1019,7 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
 
           {tab === 'list' && <>
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14, flexWrap:'wrap', gap:8 }}>
-            <p style={{ ...secTitle, margin:0 }}>単語帳（{words.length}語）</p>
+            <p style={{ ...secTitle, margin:0 }}>単語帳（{words.length}件）</p>
             <div style={{ display:'flex', gap:8 }}>
               <button style={btn.secondary} onClick={exportCsv}><Ico.Down /> CSV出力</button>
               <button style={btn.secondary} onClick={() => fileRef.current.click()}><Ico.Up /> CSV読込</button>
@@ -1006,7 +1046,10 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
               {filtered.map(w => (
                 <div key={w.id} style={{ ...card, cursor:'pointer', padding:16, marginBottom:0 }} onClick={() => { setDetail(w); setEditM(w.meaning); }}>
                   <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:8 }}>
-                    <div style={{ fontWeight:'bold', fontSize:16 }}>{w.word}</div>
+                    <div style={{ display:'flex', alignItems:'center', gap:6, flex:1 }}>
+                      <div style={{ fontWeight:'bold', fontSize:16 }}>{w.word}</div>
+                      {w.type === 'idiom' && <span style={{ fontSize:9, background:'#7a6aaa', color:'#fff', padding:'1px 6px', borderRadius:20, letterSpacing:'0.06em', flexShrink:0 }}>イディオム</span>}
+                    </div>
                     <PTag p={w.proficiency} />
                   </div>
                   <div style={{ fontSize:13, color:C.brown, lineHeight:1.6, marginBottom:6 }}>{w.meaning||<span style={{ color:'#b0a080', fontStyle:'italic' }}>意味未入力</span>}</div>
@@ -1023,7 +1066,10 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
                   <span style={{ fontSize:11, color:C.muted }}>単語詳細</span>
                   <button style={{ background:'none', border:'none', cursor:'pointer', color:C.muted }} onClick={() => setDetail(null)}><Ico.X /></button>
                 </div>
-                <div style={{ fontSize:22, fontWeight:'bold', marginBottom:10 }}>{detail.word}</div>
+                <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
+                  <div style={{ fontSize:22, fontWeight:'bold' }}>{detail.word}</div>
+                  {detail.type === 'idiom' && <span style={{ fontSize:10, background:'#7a6aaa', color:'#fff', padding:'2px 8px', borderRadius:20, letterSpacing:'0.08em' }}>イディオム</span>}
+                </div>
                 <div style={{ fontSize:12, color:C.muted, marginBottom:12, padding:'8px 10px', background:'#f5ede0', borderRadius:4, lineHeight:1.7 }}>{detail.sourceSentence}</div>
                 <div style={{ marginBottom:14 }}>
                   <label style={lbl}>意味・解説</label>
@@ -1070,12 +1116,12 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
       const updateSentence = (textId, si, analysis, translation) => {
         setTexts(prev => prev.map(t => t.id===textId ? { ...t, sentences:t.sentences.map((s,i)=>i===si?{...s,analysis,translation}:s) } : t));
       };
-      const saveWord = ({ word, meaning, sourceSentence, proficiency, registeredAt }) => {
-        setWords(prev => [{ id:generateId(), word, meaning, sourceSentence, proficiency, registeredAt }, ...prev]);
+      const saveWord = ({ word, meaning, sourceSentence, proficiency, registeredAt, type }) => {
+        setWords(prev => [{ id:generateId(), word, meaning, sourceSentence, proficiency, registeredAt, type: type||'word' }, ...prev]);
         setWordDialog(null);
       };
-      const quickSaveWord = (word, sourceSentence) => {
-        setWords(prev => [{ id:generateId(), word, meaning:'', sourceSentence, proficiency:'未学習', registeredAt:nowIso() }, ...prev]);
+      const quickSaveWord = (word, sourceSentence, type = 'word', meaning = '') => {
+        setWords(prev => [{ id:generateId(), word, meaning, sourceSentence, proficiency:'未学習', registeredAt:nowIso(), type }, ...prev]);
       };
       const updateWord = (updated, isNew) => {
         if (isNew) setWords(prev => [updated, ...prev]);
@@ -1118,7 +1164,7 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
         <div style={{ minHeight:'100vh', background:C.bg, fontFamily:"'Georgia','Hiragino Mincho ProN','Yu Mincho',serif", color:C.dark }}>
           {/* Header */}
           <header style={{ background:C.dark, color:'#f5f0e8', padding:'0 20px', display:'flex', alignItems:'center', justifyContent:'space-between', height:54, position:'sticky', top:0, zIndex:100, boxShadow:'0 2px 12px rgba(0,0,0,0.3)' }}>
-            <span style={{ fontSize:16, letterSpacing:'0.1em' }}><span style={{ color:C.gold }}>ER</span> English Reader <span style={{ fontSize:10, color:C.muted, letterSpacing:'0.05em' }}>v1.5</span></span>
+            <span style={{ fontSize:16, letterSpacing:'0.1em' }}><span style={{ color:C.gold }}>ER</span> English Reader <span style={{ fontSize:10, color:C.muted, letterSpacing:'0.05em' }}>v1.7</span></span>
             <nav style={{ display:'flex', gap:2 }}>
               {navItems.map(({ key, label, Icon }) => (
                 <button key={key}
@@ -1136,7 +1182,7 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
             {screen==='import' && <ImportScreen onSave={saveText} onNav={nav} />}
             {screen==='list'   && <ListScreen texts={texts} onNav={nav} onDelete={deleteText} />}
             {screen==='reader' && activeText && (
-              <ReaderScreen text={activeText} onOpenAnalysis={i=>setAnalysisIdx(i)} onRegisterWord={(w,s)=>setWordDialog({word:w,sourceSentence:s})} onQuickRegister={quickSaveWord} onImportJson={mergeJsonAnalysis} registeredWords={words} />
+              <ReaderScreen text={activeText} onOpenAnalysis={i=>setAnalysisIdx(i)} onRegisterWord={(w,s,t)=>setWordDialog({word:w,sourceSentence:s,type:t||'word'})} onQuickRegister={quickSaveWord} onImportJson={mergeJsonAnalysis} registeredWords={words} />
             )}
             {screen==='vocab'  && <VocabScreen words={words} onUpdate={updateWord} onDelete={deleteWord} />}
           </main>
@@ -1146,7 +1192,7 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
             <AnalysisModal text={activeText} initIdx={analysisIdx} onClose={() => setAnalysisIdx(null)} onUpdate={updateSentence} />
           )}
           {wordDialog && (
-            <WordDialog word={wordDialog.word} sourceSentence={wordDialog.sourceSentence} onSave={saveWord} onClose={() => setWordDialog(null)} />
+            <WordDialog word={wordDialog.word} sourceSentence={wordDialog.sourceSentence} type={wordDialog.type||'word'} onSave={saveWord} onClose={() => setWordDialog(null)} />
           )}
         </div>
       );
