@@ -66,13 +66,12 @@
 
     // ─── Utility ────────────────────────────────────────────────────────────
     function splitSentences(text) {
-      // 省略形（Mr. Dr. vs. etc. 数字+ピリオド 時刻など）を保護してから分割
       const abbrevs = /\b(Mr|Mrs|Ms|Dr|Prof|Sr|Jr|vs|etc|e\.g|i\.e|St|Mt|Fig|No|Vol|pp|cf|approx|dept|est|govt|corp|inc|ltd|jr|sr)\./gi;
       const timePattern = /\d+:\d+/g;
       const placeholder = text
         .replace(abbrevs, m => m.replace('.', '\x00'))
         .replace(timePattern, m => m.replace(/:/g, '\x01'));
-      const raw = placeholder.match(/[^.!?]+[.!?]+/g) || [placeholder];
+      const raw = placeholder.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [placeholder];
       return raw
         .map(s => s.replace(/\x00/g, '.').replace(/\x01/g, ':').trim())
         .filter(s => s.length > 0);
@@ -605,35 +604,31 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
           {/* ワンタップ登録パネル */}
           {tapWord && (
             <div style={{ position:'fixed', bottom:0, left:0, right:0, zIndex:350 }}>
-              {/* 背景タップで閉じる */}
-              <div style={{ position:'fixed', inset:0, zIndex:340 }} onClick={() => setTapWord(null)} />
+              <div style={{ position:'fixed', inset:0, zIndex:340 }} onPointerDown={() => setTapWord(null)} />
               <div style={{ position:'relative', zIndex:350, background:C.card, borderTop:`2px solid ${tapWord.type==='idiom'?'#7a6aaa':C.gold}`, padding:'16px 20px 20px', boxShadow:'0 -8px 32px rgba(0,0,0,0.18)' }}>
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:10 }}>
-                  <div>
+                  <div style={{ flex:1, marginRight:8 }}>
                     <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:3 }}>
                       <div style={{ fontSize:22, fontWeight:'bold', letterSpacing:'0.03em' }}>{tapWord.word}</div>
                       {tapWord.type === 'idiom' && (
                         <span style={{ fontSize:10, background:'#7a6aaa', color:'#fff', padding:'2px 8px', borderRadius:20, letterSpacing:'0.08em', fontWeight:'bold' }}>イディオム</span>
                       )}
                     </div>
-                    <div style={{ fontSize:12, color:C.muted, lineHeight:1.5, maxWidth:480 }}>
+                    <div style={{ fontSize:12, color:C.muted, lineHeight:1.5 }}>
                       {tapWord.sourceSentence.length > 80 ? tapWord.sourceSentence.slice(0,80)+'…' : tapWord.sourceSentence}
                     </div>
                   </div>
-                  <button style={{ background:'none', border:'none', cursor:'pointer', color:C.muted, padding:4 }} onClick={() => setTapWord(null)}><Ico.X /></button>
+                  <button style={{ background:'none', border:'none', cursor:'pointer', color:C.muted, padding:4, flexShrink:0 }} onClick={() => setTapWord(null)}><Ico.X /></button>
                 </div>
-                {/* 意味入力欄 */}
                 <input
                   style={{ ...inp, marginBottom:10, fontSize:13 }}
                   value={tapWord.meaning}
                   onChange={e => setTapWord(tw => ({ ...tw, meaning: e.target.value }))}
                   placeholder="意味を入力（省略可）"
                 />
-                <div style={{ display:'flex', gap:10 }}>
-                  <button style={{ ...btn.primary, flex:1, justifyContent:'center', background: tapWord.type==='idiom'?'#4a3a7a':C.dark }} onClick={handleQuickRegister}>
-                    <Ico.Star /> 単語帳に登録
-                  </button>
-                </div>
+                <button style={{ ...btn.primary, width:'100%', justifyContent:'center', background: tapWord.type==='idiom'?'#4a3a7a':C.dark }} onClick={handleQuickRegister}>
+                  <Ico.Star /> 単語帳に登録
+                </button>
               </div>
             </div>
           )}
@@ -644,15 +639,26 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
     // ─── Analysis Modal ───────────────────────────────────────────────────────
     function AnalysisModal({ text, initIdx, onClose, onUpdate }) {
       const [idx, setIdx] = useState(initIdx);
-      const s = text.sentences[idx];
+      const s = text.sentences[idx] || text.sentences[0];
       const [editA, setEditA] = useState(s.analysis);
       const [editT, setEditT] = useState(s.translation);
       const [editing, setEditing] = useState(!s.analysis && !s.translation);
 
+      // text が外部更新されたとき現在文の表示を同期（保存直後など）
+      useEffect(() => {
+        const ns = text.sentences[idx];
+        if (!ns) return;
+        if (!editing) {
+          setEditA(ns.analysis);
+          setEditT(ns.translation);
+        }
+      }, [text, idx]);
+
       const goTo = newIdx => {
         if (editing) { onUpdate(text.id, idx, editA, editT); }
-        setIdx(newIdx);
         const ns = text.sentences[newIdx];
+        if (!ns) return;
+        setIdx(newIdx);
         setEditA(ns.analysis); setEditT(ns.translation);
         setEditing(!ns.analysis && !ns.translation);
       };
@@ -1235,7 +1241,7 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
         <div style={{ minHeight:'100vh', background:C.bg, fontFamily:"'Georgia','Hiragino Mincho ProN','Yu Mincho',serif", color:C.dark }}>
           {/* Header */}
           <header style={{ background:C.dark, color:'#f5f0e8', padding:'0 20px', display:'flex', alignItems:'center', justifyContent:'space-between', height:54, position:'sticky', top:0, zIndex:100, boxShadow:'0 2px 12px rgba(0,0,0,0.3)' }}>
-            <span style={{ fontSize:16, letterSpacing:'0.1em' }}><span style={{ color:C.gold }}>ER</span> English Reader <span style={{ fontSize:10, color:C.muted, letterSpacing:'0.05em' }}>v1.8</span></span>
+            <span style={{ fontSize:16, letterSpacing:'0.1em' }}><span style={{ color:C.gold }}>ER</span> English Reader <span style={{ fontSize:10, color:C.muted, letterSpacing:'0.05em' }}>v1.9</span></span>
             <nav style={{ display:'flex', gap:2 }}>
               {navItems.map(({ key, label, Icon }) => (
                 <button key={key}
