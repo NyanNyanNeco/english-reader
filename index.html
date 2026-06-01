@@ -1,0 +1,1317 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>English Reader — 英語長文解説・単語帳</title>
+
+  <!-- PWA -->
+  <link rel="manifest" href="./manifest.json" />
+  <meta name="theme-color" content="#1a1410" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="ER Reader" />
+  <link rel="apple-touch-icon" href="./icons/icon-192.png" />
+
+  <!-- OGP -->
+  <meta property="og:title" content="English Reader" />
+  <meta property="og:description" content="英文を文単位で精読・解説・単語管理するツール" />
+  <meta property="og:type" content="website" />
+
+  <!-- React + Babel (CDN, ビルド不要) -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { -webkit-text-size-adjust: 100%; }
+    body {
+      background: #f5f0e8;
+      font-family: 'Georgia', 'Hiragino Mincho ProN', 'Yu Mincho', serif;
+      color: #1a1410;
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+    #root { min-height: 100vh; }
+    button { font-family: inherit; }
+    input, textarea { font-family: inherit; }
+    /* スクロールバー */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #f5f0e8; }
+    ::-webkit-scrollbar-thumb { background: #c8a96e; border-radius: 3px; }
+    /* iOS safe area */
+    .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel" data-presets="react">
+    const { useState, useRef, useEffect } = React;
+
+    // ─── Storage (localStorage) ──────────────────────────────────────────────
+    const STORAGE_KEYS = { texts: 'er_texts', words: 'er_words' };
+
+    function loadFromStorage(key, fallback) {
+      try {
+        const raw = localStorage.getItem(key);
+        return raw ? JSON.parse(raw) : fallback;
+      } catch { return fallback; }
+    }
+
+    function saveToStorage(key, data) {
+      try { localStorage.setItem(key, JSON.stringify(data)); } catch {}
+    }
+
+    // ─── Utility ────────────────────────────────────────────────────────────
+    function splitSentences(text) {
+      const abbrevs = /\b(Mr|Mrs|Ms|Dr|Prof|Sr|Jr|vs|etc|e\.g|i\.e|St|Mt|Fig|No|Vol|pp|cf|approx|dept|est|govt|corp|inc|ltd|jr|sr)\./gi;
+      const timePattern = /\d+:\d+/g;
+      const placeholder = text
+        .replace(abbrevs, m => m.replace('.', '\x00'))
+        .replace(timePattern, m => m.replace(/:/g, '\x01'));
+      const raw = placeholder.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [placeholder];
+      return raw
+        .map(s => s.replace(/\x00/g, '.').replace(/\x01/g, ':').trim())
+        .filter(s => s.length > 0);
+    }
+    function generateId() {
+      return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+    }
+    function nowIso() { return new Date().toISOString(); }
+    function fmtDate(iso) {
+      return new Date(iso).toLocaleDateString('ja-JP', { year:'numeric', month:'2-digit', day:'2-digit' });
+    }
+
+    // ─── Icons ──────────────────────────────────────────────────────────────
+    const Ico = {
+      Home:   () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="18" height="18"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>,
+      Plus:   () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="17" height="17"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>,
+      List:   () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="18" height="18"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>,
+      Star:   () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="18" height="18"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>,
+      Down:   () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="15" height="15"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>,
+      Up:     () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="15" height="15"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>,
+      Trash:  () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="15" height="15"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>,
+      Left:   () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18"><polyline points="15 18 9 12 15 6"/></svg>,
+      Right:  () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18"><polyline points="9 18 15 12 9 6"/></svg>,
+      Search: () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>,
+      X:      () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>,
+      Edit:   () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="15" height="15"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>,
+    };
+
+    // ─── Design Tokens ───────────────────────────────────────────────────────
+    const C = {
+      bg: '#f5f0e8', card: '#fffdf7', dark: '#1a1410', gold: '#c8a96e',
+      border: '#e0d5c0', muted: '#8b7355', brown: '#5c4a2a',
+      inputBg: '#fffdf7', inputBorder: '#d0c4a8',
+      tagBg: { 未学習:'#f0e8d8', 学習中:'#ddeeff', 習得済み:'#d8f0e0' },
+      tagFg: { 未学習:'#8b6a3a', 学習中:'#2255aa', 習得済み:'#2a7a4a' },
+    };
+
+    const btn = {
+      primary: { display:'inline-flex', alignItems:'center', gap:6, padding:'10px 20px', background:C.dark, color:'#f5f0e8', border:'none', borderRadius:5, cursor:'pointer', fontSize:13, letterSpacing:'0.04em' },
+      secondary: { display:'inline-flex', alignItems:'center', gap:6, padding:'8px 16px', background:'transparent', color:C.brown, border:`1px solid ${C.gold}`, borderRadius:5, cursor:'pointer', fontSize:13, letterSpacing:'0.04em' },
+      ghost: { display:'inline-flex', alignItems:'center', gap:5, padding:'6px 12px', background:'transparent', color:C.muted, border:`1px solid ${C.border}`, borderRadius:4, cursor:'pointer', fontSize:12 },
+      danger: { display:'inline-flex', alignItems:'center', gap:6, padding:'8px 14px', background:'transparent', color:'#a05030', border:'1px solid #d4905a', borderRadius:5, cursor:'pointer', fontSize:12 },
+    };
+
+    const card = { background:C.card, borderRadius:8, border:`1px solid ${C.border}`, padding:20, marginBottom:14, boxShadow:'0 1px 4px rgba(0,0,0,0.06)' };
+    const inp = { width:'100%', padding:'10px 12px', border:`1px solid ${C.inputBorder}`, borderRadius:4, fontSize:14, background:C.inputBg, color:C.dark, outline:'none', boxSizing:'border-box' };
+    const tex = { ...inp, resize:'vertical', lineHeight:1.8 };
+    const lbl = { display:'block', fontSize:12, color:C.muted, marginBottom:6, letterSpacing:'0.06em' };
+    const secTitle = { fontSize:10, letterSpacing:'0.18em', textTransform:'uppercase', color:C.muted, margin:'0 0 14px 0', paddingBottom:7, borderBottom:`1px solid ${C.border}` };
+    const overlay = { position:'fixed', inset:0, background:'rgba(0,0,0,0.52)', zIndex:200, display:'flex', alignItems:'center', justifyContent:'center', padding:16 };
+    const modalBox = { background:C.card, borderRadius:8, border:`1px solid ${C.border}`, padding:24, width:'100%', maxWidth:620, maxHeight:'90vh', overflowY:'auto', boxShadow:'0 8px 40px rgba(0,0,0,0.22)' };
+
+    // ─── Proficiency Tag ─────────────────────────────────────────────────────
+    function PTag({ p }) {
+      return <span style={{ display:'inline-block', padding:'2px 10px', borderRadius:20, fontSize:11, background:C.tagBg[p]||C.tagBg['未学習'], color:C.tagFg[p]||C.tagFg['未学習'], letterSpacing:'0.05em' }}>{p}</span>;
+    }
+
+    // ─── Home ────────────────────────────────────────────────────────────────
+    function HomeScreen({ texts, words, onNav }) {
+      return (
+        <div>
+          <div style={{ ...card, background:'linear-gradient(135deg,#1a1410 0%,#3d2e1a 100%)', color:'#f5f0e8', border:'none', marginBottom:20 }}>
+            <div style={{ fontSize:10, letterSpacing:'0.22em', color:C.gold, marginBottom:10 }}>ENGLISH READER</div>
+            <h1 style={{ margin:'0 0 8px', fontSize:22, fontWeight:'normal', letterSpacing:'0.05em' }}>英語長文解説・単語帳</h1>
+            <p style={{ margin:'0 0 20px', fontSize:13, color:'#c4b896', lineHeight:1.7 }}>英文を文単位で精読し、構文解説と和訳を管理するツール。</p>
+            <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
+              <button style={btn.primary} onClick={() => onNav('import')}><Ico.Plus /> 英文を追加</button>
+              <button style={{ ...btn.secondary, borderColor:C.gold, color:C.gold }} onClick={() => onNav('list')}><Ico.List /> 一覧を見る</button>
+            </div>
+          </div>
+
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:20 }}>
+            {[
+              { label:'保存英文', value:texts.length, unit:'本' },
+              { label:'登録単語・フレーズ', value:words.length, unit:'件' },
+            ].map(({ label, value, unit }) => (
+              <div key={label} style={{ ...card, textAlign:'center', marginBottom:0, padding:'16px 12px' }}>
+                <div style={{ fontSize:28, fontWeight:'bold', color:C.gold }}>{value}</div>
+                <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>{label}（{unit}）</div>
+              </div>
+            ))}
+          </div>
+
+          <p style={secTitle}>最近の英文</p>
+          {texts.length === 0 ? (
+            <div style={{ ...card, textAlign:'center', color:C.muted, padding:40 }}>
+              <div style={{ fontSize:32, marginBottom:10 }}>📖</div>
+              <div style={{ fontSize:13 }}>「英文を追加」から始めましょう</div>
+            </div>
+          ) : (
+            texts.slice(0, 3).map(t => <TextCard key={t.id} text={t} onNav={onNav} />)
+          )}
+        </div>
+      );
+    }
+
+    function TextCard({ text, onNav }) {
+      const filled = text.sentences.filter(s => s.analysis || s.translation).length;
+      const pct = text.sentences.length > 0 ? Math.round(filled / text.sentences.length * 100) : 0;
+      return (
+        <div style={{ ...card, cursor:'pointer' }} onClick={() => onNav('reader', text.id)}>
+          <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6 }}>
+            <div style={{ fontWeight:'bold', fontSize:15, flex:1 }}>{text.title}</div>
+            <div style={{ fontSize:11, color:C.muted, marginLeft:10, whiteSpace:'nowrap' }}>{fmtDate(text.createdAt)}</div>
+          </div>
+          {text.source && <div style={{ fontSize:12, color:C.muted, marginBottom:6 }}>出典: {text.source}</div>}
+          <div style={{ fontSize:13, color:C.brown, lineHeight:1.6, marginBottom:10 }}>
+            {text.sentences[0]?.text.slice(0, 70)}…
+          </div>
+          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+            <div style={{ flex:1, height:3, background:C.border, borderRadius:2 }}>
+              <div style={{ width:`${pct}%`, height:'100%', background:C.gold, borderRadius:2 }} />
+            </div>
+            <div style={{ fontSize:11, color:C.muted }}>解説 {pct}%</div>
+            <div style={{ fontSize:11, color:C.muted }}>{text.sentences.length}文</div>
+          </div>
+        </div>
+      );
+    }
+
+    // ─── Import ──────────────────────────────────────────────────────────────
+    function ImportScreen({ onSave, onNav }) {
+      const [title, setTitle] = useState('');
+      const [source, setSource] = useState('');
+      const [body, setBody] = useState('');
+      const fileRef = useRef();
+
+      const handleSave = () => {
+        if (!title.trim() || !body.trim()) return alert('タイトルと英文を入力してください。');
+        const sentences = splitSentences(body);
+        const text = { id:generateId(), title:title.trim(), source:source.trim(), sentences:sentences.map((s,i)=>({id:i,text:s,analysis:'',translation:''})), createdAt:nowIso(), lastViewedAt:nowIso() };
+        onSave(text);
+        onNav('reader', text.id);
+      };
+
+      const handleTemplate = () => {
+        if (!body.trim()) return alert('英文を入力してください。');
+        const sentences = splitSentences(body);
+        const tmpl = {
+          _instruction: '各sentenceのanalysis（構文解説）とtranslation（日本語訳）を記入し、他フィールドは変更せずにJSONを返してください。analysisは下記_promptの形式に従って記述してください。',
+          _prompt: `以下の英文各文について、analysisフィールドに下記の形式で構文解説を記入し、translationフィールドに日本語訳を記入してください。
+
+【analysisの記述形式】
+1行目: この文の文型（例: SVO、SVC など）を一言で説明する。
+続けて各要素を列挙:
+S (主語): 該当箇所 （日本語訳）
+V (動詞): 該当箇所 （補足: 時制・態など）
+O (目的語) / C (補語): 該当箇所 （日本語訳） ※該当する場合のみ
+修飾語: 該当箇所 （日本語訳） ※該当する場合のみ
+【ポイント】
+注目すべき語法・表現・文法事項を箇条書きで2〜4点記述する。
+例）
+この英文はSVO（主語＋動詞＋目的語）で構成されています。
+S (主語): A runner （一人のランナー）
+V (動詞): has finally broken （ついに破った）※現在完了形（結果）
+O (目的語): the two-hour barrier （2時間の壁）
+修飾語: for the marathon （マラソンにおける）
+【ポイント】
+finally: 「ついに」という意味で、長年の悲願達成を強調します。
+現在完了形 (has broken): 過去の出来事が現在も事実として残っているニュアンスを表します。
+barrier: 記録や達成が困難とされる「限界・基準」を比喩的に表す表現です。`,
+          title: title || '（未入力）',
+          source: source || '',
+          sentences: sentences.map((s,i) => ({ id:i, text:s, analysis:'', translation:'' }))
+        };
+        const blob = new Blob([JSON.stringify(tmpl, null, 2)], { type:'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `template_${(title||'english').replace(/\s+/g,'_')}.json`;
+        a.click();
+      };
+
+      const handleImport = e => {
+        const file = e.target.files[0]; if (!file) return;
+        const reader = new FileReader();
+        reader.onload = ev => {
+          try {
+            const data = JSON.parse(ev.target.result);
+            if (!data.sentences) throw new Error('sentences フィールドがありません');
+            const text = { id:generateId(), title:data.title||file.name, source:data.source||'', sentences:data.sentences.map((s,i)=>({id:i,text:s.text||'',analysis:s.analysis||'',translation:s.translation||''})), createdAt:nowIso(), lastViewedAt:nowIso() };
+            onSave(text);
+            onNav('reader', text.id);
+          } catch(err) { alert('読み込み失敗: ' + err.message); }
+        };
+        reader.readAsText(file);
+        e.target.value = '';
+      };
+
+      const cnt = body ? splitSentences(body).length : 0;
+
+      return (
+        <div>
+          <p style={secTitle}>英文を追加</p>
+          <div style={card}>
+            <div style={{ marginBottom:14 }}>
+              <label style={lbl}>タイトル *</label>
+              <input style={inp} value={title} onChange={e=>setTitle(e.target.value)} placeholder="例: The Economist — AI Policy 2026" />
+            </div>
+            <div style={{ marginBottom:14 }}>
+              <label style={lbl}>出典・備考</label>
+              <input style={inp} value={source} onChange={e=>setSource(e.target.value)} placeholder="例: The Economist, May 2026" />
+            </div>
+            <div style={{ marginBottom:18 }}>
+              <label style={lbl}>英文本文 *（貼り付け）</label>
+              <textarea style={{ ...tex, minHeight:170 }} value={body} onChange={e=>setBody(e.target.value)} placeholder="英文をここに貼り付けてください。句点（. ! ?）で文単位に自動分割されます。" />
+              {cnt > 0 && <div style={{ fontSize:11, color:C.gold, marginTop:4 }}>→ {cnt} 文に分割されます</div>}
+            </div>
+            <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
+              <button style={btn.primary} onClick={handleSave}><Ico.List /> 保存して閲覧</button>
+              <button style={btn.secondary} onClick={handleTemplate}><Ico.Down /> ChatGPT用テンプレート出力</button>
+              <button style={btn.secondary} onClick={() => fileRef.current.click()}><Ico.Up /> 解説済みJSONをインポート</button>
+              <input ref={fileRef} type="file" accept=".json" style={{ display:'none' }} onChange={handleImport} />
+            </div>
+            <div style={{ marginTop:18, padding:14, background:'#f5ede0', borderRadius:4, border:`1px solid ${C.border}`, fontSize:12, color:C.brown, lineHeight:1.9 }}>
+              <strong>使い方：</strong><br />
+              ① 英文を貼り付け →「ChatGPT用テンプレート出力」でJSONをダウンロード<br />
+              ② ChatGPTに渡して構文解説・和訳を記入してもらう<br />
+              ③「解説済みJSONをインポート」で読み込む
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ─── List ─────────────────────────────────────────────────────────────────
+    function ListScreen({ texts, onNav, onDelete }) {
+      const [search, setSearch] = useState('');
+      const [confirm, setConfirm] = useState(null);
+      const filtered = texts.filter(t => t.title.toLowerCase().includes(search.toLowerCase()) || (t.source||'').toLowerCase().includes(search.toLowerCase()));
+
+      return (
+        <div>
+          <p style={secTitle}>保存済み英文一覧（{texts.length}本）</p>
+          <div style={{ ...card, padding:'10px 14px', marginBottom:10, display:'flex', gap:8, alignItems:'center' }}>
+            <Ico.Search /><input style={{ ...inp, border:'none', padding:'4px 0', background:'transparent' }} placeholder="タイトル・出典で検索" value={search} onChange={e=>setSearch(e.target.value)} />
+          </div>
+          {filtered.length === 0 ? (
+            <div style={{ ...card, textAlign:'center', color:C.muted, padding:40 }}>{texts.length===0?'英文がまだありません。':'検索結果がありません。'}</div>
+          ) : filtered.map(t => (
+            <div key={t.id} style={card}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
+                <div style={{ flex:1, cursor:'pointer' }} onClick={() => onNav('reader', t.id)}>
+                  <div style={{ fontWeight:'bold', fontSize:15, marginBottom:4 }}>{t.title}</div>
+                  {t.source && <div style={{ fontSize:12, color:C.muted, marginBottom:4 }}>出典: {t.source}</div>}
+                  <div style={{ fontSize:12, color:C.muted }}>{t.sentences.length}文 ／ {fmtDate(t.createdAt)}</div>
+                </div>
+                <button style={{ ...btn.danger, marginLeft:10 }} onClick={() => setConfirm(t.id)}><Ico.Trash /></button>
+              </div>
+            </div>
+          ))}
+          {confirm && (
+            <div style={overlay}>
+              <div style={{ ...modalBox, maxWidth:340 }}>
+                <p style={{ fontSize:15, marginBottom:8 }}>この英文を削除しますか？</p>
+                <p style={{ fontSize:13, color:C.muted, marginBottom:20 }}>この操作は取り消せません。</p>
+                <div style={{ display:'flex', gap:10 }}>
+                  <button style={btn.danger} onClick={() => { onDelete(confirm); setConfirm(null); }}>削除する</button>
+                  <button style={btn.secondary} onClick={() => setConfirm(null)}>キャンセル</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ─── Reader ───────────────────────────────────────────────────────────────
+
+    // 単語トークン分割（句読点を単語と分離）
+    function tokenize(text) {
+      // 単語と非単語（スペース・句読点）に分割
+      return text.match(/[A-Za-z''\-]+|[^A-Za-z''\-]+/g) || [text];
+    }
+
+    function isWord(token) {
+      return /[A-Za-z]/.test(token);
+    }
+
+    // 単語ごとにタップ登録できる文コンポーネント
+    function TappableSentence({ sentence, sentenceIdx, onWordTap, onSentenceTap, registered, containerRef }) {
+      const tokens = tokenize(sentence.text);
+
+      return (
+        <div data-sentence-idx={sentenceIdx} style={{ display:'flex', gap:0, alignItems:'flex-start', padding:'6px 4px', borderRadius:4, marginBottom:3, lineHeight:2.1, fontSize:15, transition:'all 0.12s' }}>
+          {/* 番号：解説を開く */}
+          <span
+            onClick={onSentenceTap}
+            style={{ fontSize:10, color:C.gold, minWidth:28, paddingTop:7, userSelect:'none', flexShrink:0, cursor:'pointer', textAlign:'center' }}
+          >{sentenceIdx+1}</span>
+
+          {/* 単語トークン群 */}
+          <span style={{ flex:1, userSelect:'text' }}>
+            {tokens.map((token, ti) => {
+              if (!isWord(token)) {
+                return <span key={ti} style={{ whiteSpace:'pre-wrap' }}>{token}</span>;
+              }
+              const clean = token.replace(/^['']+|['']+$/g, '');
+              const isReg = registered.has(clean.toLowerCase());
+              return (
+                <span
+                  key={ti}
+                  onClick={e => {
+                    const sel = window.getSelection();
+                    if (sel && !sel.isCollapsed) return;
+                    e.stopPropagation();
+                    onWordTap(clean, sentence.text);
+                  }}
+                  style={{
+                    cursor: 'pointer',
+                    borderRadius: 3,
+                    padding: '1px 0',
+                    margin: 0,
+                    display: 'inline',
+                    lineHeight: 'inherit',
+                    background: isReg ? '#dff0e0' : 'transparent',
+                    color: isReg ? '#2a7a4a' : 'inherit',
+                    borderBottom: isReg ? '2px solid #5ab87a' : '2px solid transparent',
+                    transition: 'background 0.12s',
+                    WebkitTapHighlightColor: 'rgba(200,169,110,0.35)',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.background = isReg ? '#c8ecd2' : '#faecd0'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = isReg ? '#dff0e0' : 'transparent'; }}
+                >
+                  {token}
+                </span>
+              );
+            })}
+            {(sentence.analysis||sentence.translation) && <span style={{ marginLeft:6, fontSize:10, color:C.gold, userSelect:'none' }}>✦</span>}
+          </span>
+
+          {/* 解説ボタン */}
+          <span
+            onClick={onSentenceTap}
+            style={{ fontSize:13, color:C.border, padding:'6px 8px', cursor:'pointer', userSelect:'none', flexShrink:0, lineHeight:2 }}
+            onMouseEnter={e => e.currentTarget.style.color=C.muted}
+            onMouseLeave={e => e.currentTarget.style.color=C.border}
+            title="解説を開く"
+          >☰</span>
+        </div>
+      );
+    }
+
+    function ReaderScreen({ text, onOpenAnalysis, onRegisterWord, onQuickRegister, onImportJson, registeredWords }) {
+      const [toast, setToast] = useState('');
+      const [tapWord, setTapWord] = useState(null);
+      const importRef = useRef();
+
+      const showToast = msg => { setToast(msg); setTimeout(() => setToast(''), 2500); };
+
+      // 登録済み単語セット（小文字）
+      const registered = new Set((registeredWords||[]).map(w => w.word.toLowerCase()));
+
+      const handleWordTap = (word, sourceSentence) => {
+        setTapWord({ word, sourceSentence, meaning: '' });
+      };
+
+      const handleQuickRegister = () => {
+        if (!tapWord) return;
+        onQuickRegister(tapWord.word, tapWord.sourceSentence, 'word', tapWord.meaning || '');
+        showToast(`「${tapWord.word}」を単語帳に登録しました ✦`);
+        setTapWord(null);
+      };
+
+      // ChatGPT用テンプレートJSON出力（未解説の文のみ or 全文）
+      const handleExportTemplate = (onlyBlank) => {
+        const targets = onlyBlank
+          ? text.sentences.filter(s => !s.analysis && !s.translation)
+          : text.sentences;
+        if (targets.length === 0) { showToast('すべての文に解説が入力済みです ✦'); return; }
+        const tmpl = {
+          _instruction: '各sentenceのanalysis（構文解説）とtranslation（日本語訳）を記入し、他フィールドは変更せずにJSONをそのまま返してください。',
+          _prompt: '以下の英文各文について ①構文解説（S/V/O/C/Mを明示、分詞・関係詞等の説明） ②自然な日本語訳 を記入してください。',
+          title: text.title,
+          source: text.source || '',
+          sentences: targets.map(s => ({
+            id: s.id,
+            text: s.text,
+            analysis: '',
+            translation: ''
+          }))
+        };
+        const blob = new Blob([JSON.stringify(tmpl, null, 2)], { type:'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `chatgpt_${(text.title||'english').replace(/\s+/g,'_').slice(0,30)}.json`;
+        a.click();
+        showToast(`${targets.length}文のテンプレートを出力しました`);
+      };
+
+      // 解説済みJSONをインポートして現在の英文にマージ
+      const handleImportJson = e => {
+        const file = e.target.files[0]; if (!file) return;
+        const reader = new FileReader();
+        reader.onload = ev => {
+          try {
+            const data = JSON.parse(ev.target.result);
+            if (!data.sentences) throw new Error('sentencesフィールドがありません');
+            onImportJson(text.id, data.sentences);
+            showToast(`${data.sentences.length}文の解説をインポートしました ✦`);
+          } catch(err) { alert('読み込み失敗: ' + err.message); }
+        };
+        reader.readAsText(file);
+        e.target.value = '';
+      };
+
+      if (!text) return null;
+      const filled = text.sentences.filter(s => s.analysis || s.translation).length;
+      const blank = text.sentences.length - filled;
+
+      return (
+        <div>
+          <div style={{ ...card, marginBottom:10 }}>
+            <h2 style={{ margin:'0 0 4px', fontSize:18, fontWeight:'normal' }}>{text.title}</h2>
+            {text.source && <div style={{ fontSize:12, color:C.muted, marginBottom:6 }}>出典: {text.source}</div>}
+            <div style={{ fontSize:11, color:C.muted, marginBottom:14 }}>{text.sentences.length}文 ／ 解説済み {filled}文 ／ {fmtDate(text.createdAt)}</div>
+
+            {/* ChatGPT連携ボタン群 */}
+            <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+              <button style={{ ...btn.secondary, fontSize:12 }} onClick={() => handleExportTemplate(true)}>
+                <Ico.Down /> ChatGPT用JSON出力{blank > 0 ? `（未解説 ${blank}文）` : ''}
+              </button>
+              <button style={{ ...btn.secondary, fontSize:12 }} onClick={() => handleExportTemplate(false)}>
+                <Ico.Down /> 全文テンプレート出力
+              </button>
+              <button style={{ ...btn.secondary, fontSize:12 }} onClick={() => importRef.current.click()}>
+                <Ico.Up /> 解説済みJSONを反映
+              </button>
+              <input ref={importRef} type="file" accept=".json" style={{ display:'none' }} onChange={handleImportJson} />
+            </div>
+          </div>
+
+          {/* トースト通知 */}
+          {toast && (
+            <div style={{ position:'fixed', bottom:90, left:'50%', transform:'translateX(-50%)', background:C.dark, color:'#f5f0e8', padding:'10px 20px', borderRadius:6, fontSize:13, zIndex:400, boxShadow:'0 4px 20px rgba(0,0,0,0.3)', whiteSpace:'nowrap' }}>
+              {toast}
+            </div>
+          )}
+
+          <div style={{ ...card, padding:'18px 20px' }}>
+            <div style={{ fontSize:11, color:C.muted, marginBottom:12, letterSpacing:'0.08em' }}>
+              ▶ 単語をタップ → 登録パネル　／　番号・☰ → 解説
+            </div>
+            {text.sentences.map((s, i) => (
+              <TappableSentence
+                key={i}
+                sentence={s}
+                sentenceIdx={i}
+                onWordTap={handleWordTap}
+                onSentenceTap={() => onOpenAnalysis(i)}
+                registered={registered}
+              />
+            ))}
+          </div>
+
+          {/* 登録パネル */}
+          {tapWord && (
+            <div style={{ position:'fixed', bottom:0, left:0, right:0, zIndex:350 }}>
+              <div style={{ position:'fixed', inset:0, zIndex:340 }} onPointerDown={() => setTapWord(null)} />
+              <div style={{ position:'relative', zIndex:350, background:C.card, borderTop:`2px solid ${C.gold}`, padding:'14px 18px 18px', boxShadow:'0 -8px 32px rgba(0,0,0,0.18)' }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:8 }}>
+                  <div style={{ flex:1, marginRight:8 }}>
+                    <div style={{ fontSize:20, fontWeight:'bold', letterSpacing:'0.03em', marginBottom:2 }}>{tapWord.word}</div>
+                    <div style={{ fontSize:11, color:C.muted, lineHeight:1.5 }}>
+                      {tapWord.sourceSentence.length > 72 ? tapWord.sourceSentence.slice(0,72)+'…' : tapWord.sourceSentence}
+                    </div>
+                  </div>
+                  <button style={{ background:'none', border:'none', cursor:'pointer', color:C.muted, padding:4, flexShrink:0 }} onClick={() => setTapWord(null)}><Ico.X /></button>
+                </div>
+                <input
+                  style={{ ...inp, marginBottom:10, fontSize:13 }}
+                  value={tapWord.meaning}
+                  onChange={e => setTapWord(tw => ({ ...tw, meaning: e.target.value }))}
+                  placeholder="意味を入力（省略可）"
+                />
+                <button style={{ ...btn.primary, width:'100%', justifyContent:'center' }} onClick={handleQuickRegister}>
+                  <Ico.Star /> 単語帳に登録
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ─── Analysis Modal ───────────────────────────────────────────────────────
+    function AnalysisModal({ text, initIdx, onClose, onUpdate }) {
+      const [idx, setIdx] = useState(initIdx);
+      const s = text.sentences[idx] || text.sentences[0];
+      const [editA, setEditA] = useState(s.analysis);
+      const [editT, setEditT] = useState(s.translation);
+      const [editing, setEditing] = useState(!s.analysis && !s.translation);
+
+      // text が外部更新されたとき現在文の表示を同期（保存直後など）
+      useEffect(() => {
+        const ns = text.sentences[idx];
+        if (!ns) return;
+        if (!editing) {
+          setEditA(ns.analysis);
+          setEditT(ns.translation);
+        }
+      }, [text, idx]);
+
+      const goTo = newIdx => {
+        if (editing) { onUpdate(text.id, idx, editA, editT); }
+        const ns = text.sentences[newIdx];
+        if (!ns) return;
+        setIdx(newIdx);
+        setEditA(ns.analysis); setEditT(ns.translation);
+        setEditing(!ns.analysis && !ns.translation);
+      };
+
+      const handleSave = () => { onUpdate(text.id, idx, editA, editT); setEditing(false); };
+
+      return (
+        <div style={overlay} onClick={onClose}>
+          <div style={{ ...modalBox, maxWidth:680 }} onClick={e => e.stopPropagation()}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14 }}>
+              <span style={{ fontSize:11, color:C.muted, letterSpacing:'0.1em' }}>文 {idx+1} / {text.sentences.length}</span>
+              <button style={{ background:'none', border:'none', cursor:'pointer', color:C.muted }} onClick={onClose}><Ico.X /></button>
+            </div>
+
+            <div style={{ padding:'13px 15px', background:'#f5ede0', borderRadius:4, marginBottom:18, fontSize:15, lineHeight:1.9, borderLeft:`3px solid ${C.gold}` }}>
+              {s.text}
+            </div>
+
+            {editing ? (
+              <>
+                <div style={{ marginBottom:12 }}>
+                  <label style={lbl}>① 構文解説</label>
+                  <textarea style={{ ...tex, minHeight:120 }} value={editA} onChange={e=>setEditA(e.target.value)} placeholder="S: ... / V: ... / O: ... 等を記入" />
+                </div>
+                <div style={{ marginBottom:16 }}>
+                  <label style={lbl}>② 日本語訳</label>
+                  <textarea style={{ ...tex, minHeight:70 }} value={editT} onChange={e=>setEditT(e.target.value)} placeholder="日本語訳を入力…" />
+                </div>
+                <div style={{ display:'flex', gap:8 }}>
+                  <button style={btn.primary} onClick={handleSave}>保存</button>
+                  <button style={btn.secondary} onClick={() => setEditing(false)}>キャンセル</button>
+                </div>
+              </>
+            ) : (
+              <>
+                {/* ② 日本語訳（上に移動） */}
+                <div style={{ marginBottom:16, borderLeft:'3px solid #5ab87a', paddingLeft:14, paddingTop:10, paddingBottom:10, background:'#f4fbf6', borderRadius:'0 6px 6px 0' }}>
+                  <div style={{ display:'inline-flex', alignItems:'center', gap:6, marginBottom:10 }}>
+                    <span style={{ display:'inline-block', background:'#2a7a4a', color:'#fff', fontSize:11, fontWeight:'bold', padding:'2px 10px', borderRadius:20, letterSpacing:'0.08em' }}>② 日本語訳</span>
+                  </div>
+                  {s.translation
+                    ? <div style={{ fontSize:15, lineHeight:1.9, color:'#1a3a2a' }}>{s.translation}</div>
+                    : <div style={{ fontSize:13, color:'#b0a080', fontStyle:'italic' }}>訳未入力</div>}
+                </div>
+
+                {/* ① 構文解説（下に移動） */}
+                <div style={{ marginBottom:20, borderLeft:'3px solid #c8a96e', paddingLeft:14, paddingTop:10, paddingBottom:10, background:'#fdf8ef', borderRadius:'0 6px 6px 0' }}>
+                  <div style={{ display:'inline-flex', alignItems:'center', gap:6, marginBottom:10 }}>
+                    <span style={{ display:'inline-block', background:'#8b6a3a', color:'#fff', fontSize:11, fontWeight:'bold', padding:'2px 10px', borderRadius:20, letterSpacing:'0.08em' }}>① 構文解説</span>
+                  </div>
+                  {s.analysis
+                    ? <div style={{ fontSize:13, lineHeight:2.1, whiteSpace:'pre-wrap', color:'#3a2a10' }}>{s.analysis}</div>
+                    : <div style={{ fontSize:13, color:'#b0a080', fontStyle:'italic' }}>解説未入力 — 手動入力またはJSONインポートで追加できます。</div>}
+                </div>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:8 }}>
+                  <div style={{ display:'flex', gap:8 }}>
+                    <button style={btn.ghost} disabled={idx===0} onClick={() => goTo(idx-1)}><Ico.Left /> 前</button>
+                    <button style={btn.ghost} disabled={idx===text.sentences.length-1} onClick={() => goTo(idx+1)}>次 <Ico.Right /></button>
+                  </div>
+                  <button style={btn.secondary} onClick={() => setEditing(true)}><Ico.Edit /> 手動入力</button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // ─── Word Dialog ──────────────────────────────────────────────────────────
+    function WordDialog({ word, sourceSentence, type, onSave, onClose }) {
+      const [meaning, setMeaning] = useState('');
+      const [prof, setProf] = useState('未学習');
+      const isIdiom = type === 'idiom';
+      return (
+        <div style={overlay}>
+          <div style={{ ...modalBox, maxWidth:460 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', marginBottom:14 }}>
+              <span style={{ fontSize:11, color:C.muted }}>単語帳に登録</span>
+              <button style={{ background:'none', border:'none', cursor:'pointer', color:C.muted }} onClick={onClose}><Ico.X /></button>
+            </div>
+            <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
+              <div style={{ fontSize:20, fontWeight:'bold' }}>{word}</div>
+              {isIdiom && <span style={{ fontSize:10, background:'#7a6aaa', color:'#fff', padding:'2px 8px', borderRadius:20, letterSpacing:'0.08em' }}>イディオム</span>}
+            </div>
+            <div style={{ fontSize:12, color:C.muted, marginBottom:14, padding:'8px 10px', background:'#f5ede0', borderRadius:4, lineHeight:1.7 }}>{sourceSentence}</div>
+            <div style={{ marginBottom:14 }}>
+              <label style={lbl}>{isIdiom ? 'イディオムの意味・用法' : '意味・解説'}</label>
+              <textarea style={{ ...tex, minHeight:80 }} value={meaning} onChange={e=>setMeaning(e.target.value)} placeholder={isIdiom ? '例: take it for granted（〜を当然のことと思う）' : '意味を入力（後から編集可）'} />
+            </div>
+            <div style={{ marginBottom:20 }}>
+              <label style={lbl}>習熟度</label>
+              <div style={{ display:'flex', gap:8 }}>
+                {['未学習','学習中','習得済み'].map(p => (
+                  <button key={p} style={{ ...btn.secondary, borderColor:prof===p?C.gold:C.inputBorder, background:prof===p?'#fdf5e4':'transparent' }} onClick={() => setProf(p)}>{p}</button>
+                ))}
+              </div>
+            </div>
+            <button style={{ ...btn.primary, background: isIdiom?'#4a3a7a':C.dark }} onClick={() => onSave({ word, meaning, sourceSentence, proficiency:prof, registeredAt:nowIso(), type: type||'word' })}>
+              <Ico.Star /> 登録する
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // ─── Card Mode ────────────────────────────────────────────────────────────
+    function CardMode({ words, onUpdate }) {
+      const deck = words.filter(w => w.word && w.meaning);
+      const [idx, setIdx] = useState(0);
+      const [flipped, setFlipped] = useState(false);
+      const [filter, setFilter] = useState('すべて');
+      const [mode, setMode] = useState('en→ja');
+
+      const filtered = deck.filter(w => filter === 'すべて' || w.proficiency === filter);
+
+      useEffect(() => { setIdx(0); setFlipped(false); }, [filter, mode]);
+
+      if (filtered.length === 0) {
+        return (
+          <div style={{ ...card, textAlign:'center', padding:40, color:C.muted }}>
+            <div style={{ fontSize:32, marginBottom:10 }}>🃏</div>
+            <div>意味が入力された単語がありません。<br />単語帳に意味を登録してからご利用ください。</div>
+          </div>
+        );
+      }
+
+      const w = filtered[idx % filtered.length];
+      const front = mode === 'en→ja' ? w.word : w.meaning;
+      const back  = mode === 'en→ja' ? w.meaning : w.word;
+
+      const next = () => { setIdx(i => (i + 1) % filtered.length); setFlipped(false); };
+      const prev = () => { setIdx(i => (i - 1 + filtered.length) % filtered.length); setFlipped(false); };
+
+      const setProf = p => { onUpdate({ ...w, proficiency: p }); };
+
+      return (
+        <div>
+          {/* フィルタ・モード */}
+          <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:14 }}>
+            {['すべて','未学習','学習中','習得済み'].map(f => (
+              <button key={f} style={{ ...btn.ghost, borderColor:filter===f?C.gold:C.border, color:filter===f?C.brown:C.muted, background:filter===f?'#fdf5e4':'transparent', fontSize:11 }} onClick={() => setFilter(f)}>{f}</button>
+            ))}
+            <div style={{ marginLeft:'auto', display:'flex', gap:6 }}>
+              {['en→ja','ja→en'].map(m => (
+                <button key={m} style={{ ...btn.ghost, borderColor:mode===m?C.gold:C.border, color:mode===m?C.brown:C.muted, background:mode===m?'#fdf5e4':'transparent', fontSize:11 }} onClick={() => { setMode(m); setFlipped(false); }}>{m}</button>
+              ))}
+            </div>
+          </div>
+
+          {/* 進捗 */}
+          <div style={{ fontSize:12, color:C.muted, textAlign:'center', marginBottom:10 }}>{idx + 1} / {filtered.length}</div>
+
+          {/* カード */}
+          <div
+            onClick={() => setFlipped(f => !f)}
+            style={{ ...card, minHeight:200, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', cursor:'pointer', userSelect:'none', padding:32, textAlign:'center', position:'relative', transition:'box-shadow 0.15s', boxShadow: flipped ? '0 4px 20px rgba(200,169,110,0.4)' : '0 1px 4px rgba(0,0,0,0.06)', borderColor: flipped ? C.gold : C.border }}
+          >
+            <div style={{ fontSize:10, color:C.muted, marginBottom:12, letterSpacing:'0.1em' }}>{flipped ? (mode==='en→ja'?'意味':'英語') : (mode==='en→ja'?'英語':'意味')}</div>
+            <div style={{ fontSize: flipped ? 16 : 26, fontWeight: flipped ? 'normal' : 'bold', lineHeight:1.7, color: flipped ? C.brown : C.dark, maxWidth:380 }}>{flipped ? back : front}</div>
+            {!flipped && <div style={{ position:'absolute', bottom:12, fontSize:11, color:C.border }}>タップして意味を確認</div>}
+            {flipped && w.sourceSentence && (
+              <div style={{ marginTop:14, fontSize:12, color:C.muted, lineHeight:1.6, borderTop:`1px solid ${C.border}`, paddingTop:10, maxWidth:380 }}>
+                {w.sourceSentence.slice(0,90)}{w.sourceSentence.length>90?'…':''}
+              </div>
+            )}
+          </div>
+
+          {/* ナビ */}
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14 }}>
+            <button style={btn.secondary} onClick={prev}><Ico.Left /> 前へ</button>
+            <button style={btn.secondary} onClick={next}>次へ <Ico.Right /></button>
+          </div>
+
+          {/* 習熟度変更 */}
+          {flipped && (
+            <div style={{ ...card, padding:'12px 16px' }}>
+              <div style={{ fontSize:12, color:C.muted, marginBottom:8 }}>習熟度を更新</div>
+              <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+                {['未学習','学習中','習得済み'].map(p => (
+                  <button key={p} style={{ ...btn.secondary, borderColor:w.proficiency===p?C.gold:C.inputBorder, background:w.proficiency===p?'#fdf5e4':'transparent', flex:1, justifyContent:'center' }} onClick={() => setProf(p)}>{p}</button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ─── Quiz Mode ────────────────────────────────────────────────────────────
+    function QuizMode({ words }) {
+      const deck = words.filter(w => w.word && w.meaning);
+      const [filter, setFilter] = useState('すべて');
+      const [mode, setMode] = useState('en→ja'); // 'en→ja' | 'ja→en'
+      const [quizWords, setQuizWords] = useState(null);
+      const [qi, setQi] = useState(0);
+      const [answer, setAnswer] = useState('');
+      const [result, setResult] = useState(null); // null | 'correct' | 'wrong'
+      const [score, setScore] = useState({ correct:0, wrong:0 });
+      const [done, setDone] = useState(false);
+      const [choices, setChoices] = useState([]);
+      const [quizType, setQuizType] = useState('choice'); // 'choice' | 'type'
+
+      const filtered = deck.filter(w => filter === 'すべて' || w.proficiency === filter);
+
+      function shuffle(arr) {
+        const a = [...arr]; for (let i = a.length-1; i > 0; i--) { const j = Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a;
+      }
+
+      const startQuiz = () => {
+        if (filtered.length < 2) return alert('クイズには意味が入力された単語が2語以上必要です。');
+        setQuizWords(shuffle(filtered));
+        setQi(0); setScore({ correct:0, wrong:0 }); setResult(null); setAnswer(''); setDone(false);
+      };
+
+      useEffect(() => {
+        if (!quizWords) return;
+        const q = quizWords[qi];
+        if (!q) return;
+        const correct = mode==='en→ja' ? q.meaning : q.word;
+        const pool = filtered.filter(w => w.id !== q.id);
+        const wrong3 = shuffle(pool).slice(0,3).map(w => mode==='en→ja' ? w.meaning : w.word);
+        setChoices(shuffle([correct, ...wrong3]));
+        setAnswer(''); setResult(null);
+      }, [qi, quizWords, mode]);
+
+      if (!quizWords) {
+        return (
+          <div>
+            <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:14 }}>
+              {['すべて','未学習','学習中','習得済み'].map(f => (
+                <button key={f} style={{ ...btn.ghost, borderColor:filter===f?C.gold:C.border, color:filter===f?C.brown:C.muted, background:filter===f?'#fdf5e4':'transparent', fontSize:11 }} onClick={() => setFilter(f)}>{f}</button>
+              ))}
+            </div>
+            <div style={{ display:'flex', gap:8, marginBottom:14 }}>
+              {['en→ja','ja→en'].map(m => (
+                <button key={m} style={{ ...btn.secondary, borderColor:mode===m?C.gold:C.inputBorder, background:mode===m?'#fdf5e4':'transparent' }} onClick={() => setMode(m)}>{m}</button>
+              ))}
+            </div>
+            <div style={{ display:'flex', gap:8, marginBottom:20 }}>
+              {[['choice','選択式'],['type','記述式']].map(([k,l]) => (
+                <button key={k} style={{ ...btn.secondary, borderColor:quizType===k?C.gold:C.inputBorder, background:quizType===k?'#fdf5e4':'transparent' }} onClick={() => setQuizType(k)}>{l}</button>
+              ))}
+            </div>
+            <div style={{ ...card, textAlign:'center', padding:32 }}>
+              <div style={{ fontSize:32, marginBottom:12 }}>📝</div>
+              <div style={{ fontSize:15, marginBottom:6 }}>対象: {filtered.length}語</div>
+              <div style={{ fontSize:12, color:C.muted, marginBottom:20 }}>モード: {mode}　形式: {quizType==='choice'?'選択式':'記述式'}</div>
+              {filtered.length < 2
+                ? <div style={{ color:C.muted, fontSize:13 }}>クイズには2語以上必要です。</div>
+                : <button style={{ ...btn.primary, margin:'0 auto' }} onClick={startQuiz}>クイズ開始</button>
+              }
+            </div>
+          </div>
+        );
+      }
+
+      if (done) {
+        const total = score.correct + score.wrong;
+        const pct = total > 0 ? Math.round(score.correct / total * 100) : 0;
+        return (
+          <div style={{ ...card, textAlign:'center', padding:40 }}>
+            <div style={{ fontSize:32, marginBottom:10 }}>{pct >= 80 ? '🎉' : pct >= 50 ? '👍' : '💪'}</div>
+            <div style={{ fontSize:20, fontWeight:'bold', marginBottom:8 }}>クイズ結果</div>
+            <div style={{ fontSize:28, color:C.gold, fontWeight:'bold', marginBottom:4 }}>{pct}%</div>
+            <div style={{ fontSize:13, color:C.muted, marginBottom:20 }}>{score.correct}問正解 / {total}問中</div>
+            <div style={{ display:'flex', gap:10, justifyContent:'center' }}>
+              <button style={btn.primary} onClick={startQuiz}>もう一度</button>
+              <button style={btn.secondary} onClick={() => setQuizWords(null)}>設定に戻る</button>
+            </div>
+          </div>
+        );
+      }
+
+      const q = quizWords[qi];
+      if (!q) return null;
+      const question = mode==='en→ja' ? q.word : q.meaning;
+      const correctAns = mode==='en→ja' ? q.meaning : q.word;
+
+      const handleChoice = (c) => {
+        if (result) return;
+        const ok = c === correctAns;
+        setResult(ok ? 'correct' : 'wrong');
+        setScore(s => ok ? { ...s, correct:s.correct+1 } : { ...s, wrong:s.wrong+1 });
+      };
+
+      const handleType = () => {
+        if (result) return;
+        const ok = answer.trim().toLowerCase() === correctAns.trim().toLowerCase();
+        setResult(ok ? 'correct' : 'wrong');
+        setScore(s => ok ? { ...s, correct:s.correct+1 } : { ...s, wrong:s.wrong+1 });
+      };
+
+      const goNext = () => {
+        if (qi + 1 >= quizWords.length) { setDone(true); return; }
+        setQi(i => i + 1);
+      };
+
+      const progressPct = Math.round(qi / quizWords.length * 100);
+
+      return (
+        <div>
+          {/* 進捗バー */}
+          <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:14 }}>
+            <div style={{ flex:1, height:4, background:C.border, borderRadius:2 }}>
+              <div style={{ width:`${progressPct}%`, height:'100%', background:C.gold, borderRadius:2, transition:'width 0.3s' }} />
+            </div>
+            <div style={{ fontSize:12, color:C.muted, whiteSpace:'nowrap' }}>{qi+1} / {quizWords.length}</div>
+            <div style={{ fontSize:12, color:'#2a7a4a' }}>✓{score.correct}</div>
+            <div style={{ fontSize:12, color:'#a05030' }}>✗{score.wrong}</div>
+          </div>
+
+          {/* 問題 */}
+          <div style={{ ...card, textAlign:'center', padding:'28px 20px', marginBottom:12 }}>
+            <div style={{ fontSize:11, color:C.muted, marginBottom:10 }}>{mode==='en→ja'?'次の英単語の意味は？':'次の意味の英単語は？'}</div>
+            <div style={{ fontSize:24, fontWeight:'bold', letterSpacing:'0.03em' }}>{question}</div>
+            {q.sourceSentence && result && (
+              <div style={{ marginTop:12, fontSize:12, color:C.muted, lineHeight:1.6 }}>{q.sourceSentence.slice(0,90)}{q.sourceSentence.length>90?'…':''}</div>
+            )}
+          </div>
+
+          {/* 選択肢 or 記述 */}
+          {quizType === 'choice' ? (
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:14 }}>
+              {choices.map((c, ci) => {
+                let bg = C.card; let bc = C.border; let col = C.dark;
+                if (result) {
+                  if (c === correctAns) { bg='#d8f0e0'; bc='#5ab87a'; col='#2a7a4a'; }
+                  else if (c !== correctAns && result==='wrong' && answer===c) { bg='#fde8e0'; bc='#d4905a'; col='#a05030'; }
+                }
+                return (
+                  <button key={ci}
+                    onClick={() => { setAnswer(c); handleChoice(c); }}
+                    style={{ padding:'12px 10px', borderRadius:6, border:`1.5px solid ${bc}`, background:bg, color:col, cursor:result?'default':'pointer', fontSize:13, lineHeight:1.5, textAlign:'left', fontFamily:'inherit' }}
+                  >{c}</button>
+                );
+              })}
+            </div>
+          ) : (
+            <div style={{ marginBottom:14 }}>
+              <input
+                style={{ ...inp, marginBottom:8 }}
+                value={answer}
+                onChange={e => setAnswer(e.target.value)}
+                onKeyDown={e => e.key==='Enter' && !result && handleType()}
+                placeholder={mode==='en→ja'?'意味を入力…':'英単語を入力…'}
+                disabled={!!result}
+                autoFocus
+              />
+              {!result && <button style={{ ...btn.primary, width:'100%', justifyContent:'center' }} onClick={handleType}>回答する</button>}
+              {result && (
+                <div style={{ padding:'10px 14px', borderRadius:6, background:result==='correct'?'#d8f0e0':'#fde8e0', border:`1px solid ${result==='correct'?'#5ab87a':'#d4905a'}`, color:result==='correct'?'#2a7a4a':'#a05030', fontSize:13 }}>
+                  {result==='correct' ? '✓ 正解！' : `✗ 不正解。正解: ${correctAns}`}
+                </div>
+              )}
+            </div>
+          )}
+
+          {result && (
+            <button style={{ ...btn.primary, width:'100%', justifyContent:'center' }} onClick={goNext}>
+              {qi+1 >= quizWords.length ? '結果を見る' : '次の問題 →'}
+            </button>
+          )}
+        </div>
+      );
+    }
+
+    // ─── Vocab ────────────────────────────────────────────────────────────────
+    function VocabScreen({ words, onUpdate, onDelete }) {
+      const [tab, setTab] = useState('list');
+      const [search, setSearch] = useState('');
+      const [filter, setFilter] = useState('すべて');
+      const [detail, setDetail] = useState(null);
+      const [editM, setEditM] = useState('');
+      const [editW, setEditW] = useState('');
+      const [editType, setEditType] = useState('word');
+      const [editSrc, setEditSrc] = useState('');
+      const [showAddForm, setShowAddForm] = useState(false);
+      const [newPhrase, setNewPhrase] = useState('');
+      const [newMeaning, setNewMeaning] = useState('');
+      const fileRef = useRef();
+
+      const openDetail = w => {
+        setDetail(w);
+        setEditM(w.meaning);
+        setEditW(w.word);
+        setEditType(w.type || 'word');
+        setEditSrc(w.sourceSentence || '');
+      };
+
+      const filtered = words.filter(w => {
+        const ms = w.word.toLowerCase().includes(search.toLowerCase()) || (w.meaning||'').includes(search);
+        const mf = filter === 'すべて' || w.proficiency === filter;
+        return ms && mf;
+      });
+
+      const handleAddPhrase = () => {
+        if (!newPhrase.trim()) return;
+        onUpdate({ id:generateId(), word:newPhrase.trim(), meaning:newMeaning.trim(), sourceSentence:'', proficiency:'未学習', registeredAt:nowIso(), type:'idiom' }, true);
+        setNewPhrase(''); setNewMeaning(''); setShowAddForm(false);
+      };
+
+      const exportCsv = () => {
+        const hdr = 'word,meaning,source_sentence,proficiency,registered_at,type';
+        const rows = words.map(w => [w.word, w.meaning, w.sourceSentence, w.proficiency, w.registeredAt, w.type||'word']
+          .map(v => `"${(v||'').replace(/"/g,'""')}"`).join(','));
+        const blob = new Blob(['\uFEFF'+[hdr,...rows].join('\n')], { type:'text/csv;charset=utf-8;' });
+        const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'vocabulary.csv'; a.click();
+      };
+
+      const parseCsvLine = line => {
+        const result = [];
+        let cur = '', inQ = false;
+        for (let i = 0; i < line.length; i++) {
+          const ch = line[i];
+          if (inQ) {
+            if (ch === '"' && line[i+1] === '"') { cur += '"'; i++; }
+            else if (ch === '"') { inQ = false; }
+            else { cur += ch; }
+          } else {
+            if (ch === '"') { inQ = true; }
+            else if (ch === ',') { result.push(cur); cur = ''; }
+            else { cur += ch; }
+          }
+        }
+        result.push(cur);
+        return result;
+      };
+
+      const importCsv = e => {
+        const file = e.target.files[0]; if (!file) return;
+        const reader = new FileReader();
+        reader.onload = ev => {
+          const lines = ev.target.result.split('\n').slice(1);
+          lines.forEach(line => {
+            if (!line.trim()) return;
+            const c = parseCsvLine(line);
+            if (c[0]) onUpdate({ id:generateId(), word:c[0]||'', meaning:c[1]||'', sourceSentence:c[2]||'', proficiency:c[3]||'未学習', registeredAt:c[4]||nowIso(), type:c[5]||'word' }, true);
+          });
+        };
+        reader.readAsText(file,'utf-8');
+        e.target.value='';
+      };
+
+      return (
+        <div>
+          {/* タブ */}
+          <div style={{ display:'flex', gap:0, marginBottom:16, borderBottom:`2px solid ${C.border}` }}>
+            {[['list','📋 一覧'],['card','🃏 カード'],['quiz','📝 クイズ']].map(([k,l]) => (
+              <button key={k} onClick={() => setTab(k)} style={{ padding:'8px 20px', border:'none', borderBottom:tab===k?`2px solid ${C.gold}`:'2px solid transparent', background:'transparent', color:tab===k?C.brown:C.muted, cursor:'pointer', fontFamily:'inherit', fontSize:13, fontWeight:tab===k?'bold':'normal', marginBottom:-2, letterSpacing:'0.04em' }}>{l}</button>
+            ))}
+          </div>
+
+          {tab === 'card' && <CardMode words={words} onUpdate={w => onUpdate(w, false)} />}
+          {tab === 'quiz' && <QuizMode words={words} />}
+
+          {tab === 'list' && <>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10, flexWrap:'wrap', gap:8 }}>
+            <p style={{ ...secTitle, margin:0 }}>単語帳（{words.length}件）</p>
+            <div style={{ display:'flex', gap:8 }}>
+              <button style={{ ...btn.secondary, fontSize:12, borderColor:'#7a6aaa', color:'#4a3a7a', background: showAddForm?'#f0ecfa':'transparent' }} onClick={() => { setShowAddForm(f => !f); setNewPhrase(''); setNewMeaning(''); }}>
+                {showAddForm ? '✕ キャンセル' : '＋ フレーズを追加'}
+              </button>
+              <button style={btn.secondary} onClick={exportCsv}><Ico.Down /> CSV出力</button>
+              <button style={btn.secondary} onClick={() => fileRef.current.click()}><Ico.Up /> CSV読込</button>
+              <input ref={fileRef} type="file" accept=".csv" style={{ display:'none' }} onChange={importCsv} />
+            </div>
+          </div>
+
+          {/* フレーズ追加フォーム */}
+          {showAddForm && (
+            <div style={{ ...card, border:'2px solid #c8b8e8', background:'#f8f4fd', marginBottom:12, padding:'14px 16px' }}>
+              <div style={{ fontSize:10, color:'#7a6aaa', letterSpacing:'0.15em', marginBottom:10, fontWeight:'bold' }}>✦ イディオム / フレーズを追加</div>
+              <div style={{ marginBottom:8 }}>
+                <label style={{ ...lbl, color:'#7a6aaa' }}>フレーズ *</label>
+                <input
+                  style={{ ...inp, borderColor:'#c8b8e8', fontWeight:'bold', color:'#4a3a7a' }}
+                  value={newPhrase}
+                  onChange={e => setNewPhrase(e.target.value)}
+                  placeholder="例: make way for, at first glance"
+                  autoFocus
+                />
+              </div>
+              <div style={{ marginBottom:12 }}>
+                <label style={{ ...lbl, color:'#7a6aaa' }}>意味・用法</label>
+                <input
+                  style={{ ...inp, borderColor:'#c8b8e8' }}
+                  value={newMeaning}
+                  onChange={e => setNewMeaning(e.target.value)}
+                  placeholder="例: 〜のために場所を空ける"
+                  onKeyDown={e => e.key === 'Enter' && handleAddPhrase()}
+                />
+              </div>
+              <button
+                style={{ ...btn.primary, background:'#4a3a7a', width:'100%', justifyContent:'center' }}
+                onClick={handleAddPhrase}
+              >
+                <Ico.Star /> 単語帳に登録
+              </button>
+            </div>
+          )}
+          <div style={{ ...card, padding:'10px 14px', marginBottom:10 }}>
+            <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
+              <Ico.Search /><input style={{ ...inp, border:'none', padding:'4px 0', background:'transparent' }} placeholder="単語・意味で検索" value={search} onChange={e=>setSearch(e.target.value)} />
+            </div>
+            <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+              {['すべて','未学習','学習中','習得済み'].map(f => (
+                <button key={f} style={{ ...btn.ghost, borderColor:filter===f?C.gold:C.border, color:filter===f?C.brown:C.muted, background:filter===f?'#fdf5e4':'transparent', fontSize:11 }} onClick={() => setFilter(f)}>{f}</button>
+              ))}
+            </div>
+          </div>
+
+          {filtered.length === 0 ? (
+            <div style={{ ...card, textAlign:'center', color:C.muted, padding:40 }}>
+              {words.length===0?'単語帳が空です。英文閲覧画面で単語を選択して登録できます。':'該当する単語がありません。'}
+            </div>
+          ) : (
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(250px, 1fr))', gap:10 }}>
+              {filtered.map(w => (
+                <div key={w.id} style={{ ...card, cursor:'pointer', padding:16, marginBottom:0 }} onClick={() => openDetail(w)}>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:8 }}>
+                    <div style={{ display:'flex', alignItems:'center', gap:6, flex:1 }}>
+                      <div style={{ fontWeight:'bold', fontSize:16 }}>{w.word}</div>
+                      {w.type === 'idiom' && <span style={{ fontSize:9, background:'#7a6aaa', color:'#fff', padding:'1px 6px', borderRadius:20, letterSpacing:'0.06em', flexShrink:0 }}>イディオム</span>}
+                    </div>
+                    <PTag p={w.proficiency} />
+                  </div>
+                  <div style={{ fontSize:13, color:C.brown, lineHeight:1.6, marginBottom:6 }}>{w.meaning||<span style={{ color:'#b0a080', fontStyle:'italic' }}>意味未入力</span>}</div>
+                  <div style={{ fontSize:11, color:'#b0a080', lineHeight:1.5 }}>{(w.sourceSentence||'').slice(0,50)}{(w.sourceSentence||'').length>50?'…':''}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {detail && (
+            <div style={overlay} onClick={() => setDetail(null)}>
+              <div style={{ ...modalBox, maxWidth:500 }} onClick={e=>e.stopPropagation()}>
+                <div style={{ display:'flex', justifyContent:'space-between', marginBottom:14 }}>
+                  <span style={{ fontSize:11, color:C.muted, letterSpacing:'0.08em' }}>単語・フレーズを編集</span>
+                  <button style={{ background:'none', border:'none', cursor:'pointer', color:C.muted }} onClick={() => setDetail(null)}><Ico.X /></button>
+                </div>
+
+                {/* 単語テキスト編集 */}
+                <div style={{ marginBottom:12 }}>
+                  <label style={lbl}>単語 / フレーズ</label>
+                  <input
+                    style={{ ...inp, fontSize:18, fontWeight:'bold', letterSpacing:'0.03em' }}
+                    value={editW}
+                    onChange={e => setEditW(e.target.value)}
+                    placeholder="単語またはフレーズを入力"
+                  />
+                </div>
+
+                {/* 種別切り替え */}
+                <div style={{ marginBottom:12 }}>
+                  <label style={lbl}>種別</label>
+                  <div style={{ display:'flex', gap:8 }}>
+                    <button
+                      style={{ ...btn.secondary, borderColor:editType==='word'?C.gold:C.inputBorder, background:editType==='word'?'#fdf5e4':'transparent' }}
+                      onClick={() => setEditType('word')}
+                    >単語</button>
+                    <button
+                      style={{ ...btn.secondary, borderColor:editType==='idiom'?'#7a6aaa':C.inputBorder, background:editType==='idiom'?'#f0ecfa':'transparent', color:editType==='idiom'?'#4a3a7a':C.brown }}
+                      onClick={() => setEditType('idiom')}
+                    >
+                      <span style={{ fontSize:10 }}>✦</span> イディオム
+                    </button>
+                  </div>
+                </div>
+
+                {/* 意味・解説 */}
+                <div style={{ marginBottom:12 }}>
+                  <label style={lbl}>{editType==='idiom' ? 'イディオムの意味・用法' : '意味・解説'}</label>
+                  <textarea
+                    style={{ ...tex, minHeight:80 }}
+                    value={editM}
+                    onChange={e => setEditM(e.target.value)}
+                    placeholder={editType==='idiom' ? '例: take it for granted（〜を当然のことと思う）' : '意味を入力'}
+                  />
+                </div>
+
+                {/* ソース文 */}
+                <div style={{ marginBottom:12 }}>
+                  <label style={lbl}>出典文・例文（任意）</label>
+                  <textarea
+                    style={{ ...tex, minHeight:60, fontSize:13 }}
+                    value={editSrc}
+                    onChange={e => setEditSrc(e.target.value)}
+                    placeholder="この単語が含まれる英文や例文を入力"
+                  />
+                </div>
+
+                {/* 習熟度 */}
+                <div style={{ marginBottom:18 }}>
+                  <label style={lbl}>習熟度</label>
+                  <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+                    {['未学習','学習中','習得済み'].map(p => (
+                      <button key={p} style={{ ...btn.secondary, borderColor:detail.proficiency===p?C.gold:C.inputBorder, background:detail.proficiency===p?'#fdf5e4':'transparent' }} onClick={() => setDetail({ ...detail, proficiency:p })}>{p}</button>
+                    ))}
+                  </div>
+                </div>
+
+                <div style={{ display:'flex', gap:8 }}>
+                  <button
+                    style={{ ...btn.primary, background: editType==='idiom'?'#4a3a7a':C.dark }}
+                    onClick={() => {
+                      if (!editW.trim()) return;
+                      onUpdate({ ...detail, word:editW.trim(), meaning:editM, type:editType, sourceSentence:editSrc });
+                      setDetail(null);
+                    }}
+                  ><Ico.Edit /> 保存</button>
+                  <button style={btn.danger} onClick={() => { onDelete(detail.id); setDetail(null); }}><Ico.Trash /> 削除</button>
+                </div>
+              </div>
+            </div>
+          )}
+          </>}
+        </div>
+      );
+    }
+
+    // ─── App Root ─────────────────────────────────────────────────────────────
+    function App() {
+      const [screen, setScreen] = useState('home');
+      const [activeId, setActiveId] = useState(null);
+      const [analysisIdx, setAnalysisIdx] = useState(null);
+      const [wordDialog, setWordDialog] = useState(null);
+
+      const [texts, setTexts] = useState(() => loadFromStorage(STORAGE_KEYS.texts, []));
+      const [words, setWords] = useState(() => loadFromStorage(STORAGE_KEYS.words, []));
+
+      // localStorage同期
+      useEffect(() => saveToStorage(STORAGE_KEYS.texts, texts), [texts]);
+      useEffect(() => saveToStorage(STORAGE_KEYS.words, words), [words]);
+
+      const nav = (target, id) => { setScreen(target); if (id) setActiveId(id); setAnalysisIdx(null); };
+
+      const saveText = t => setTexts(prev => { const ex = prev.find(x=>x.id===t.id); return ex ? prev.map(x=>x.id===t.id?t:x) : [t,...prev]; });
+      const deleteText = id => { setTexts(prev=>prev.filter(t=>t.id!==id)); if (activeId===id) setScreen('list'); };
+      const updateSentence = (textId, si, analysis, translation) => {
+        setTexts(prev => prev.map(t => t.id===textId ? { ...t, sentences:t.sentences.map((s,i)=>i===si?{...s,analysis,translation}:s) } : t));
+      };
+      const saveWord = ({ word, meaning, sourceSentence, proficiency, registeredAt, type }) => {
+        setWords(prev => [{ id:generateId(), word, meaning, sourceSentence, proficiency, registeredAt, type: type||'word' }, ...prev]);
+        setWordDialog(null);
+      };
+      const quickSaveWord = (word, sourceSentence, type = 'word', meaning = '') => {
+        setWords(prev => [{ id:generateId(), word, meaning, sourceSentence, proficiency:'未学習', registeredAt:nowIso(), type }, ...prev]);
+      };
+      const updateWord = (updated, isNew) => {
+        if (isNew) setWords(prev => [updated, ...prev]);
+        else setWords(prev => prev.map(w => w.id===updated.id ? updated : w));
+      };
+      const deleteWord = id => setWords(prev => prev.filter(w => w.id!==id));
+
+      // ChatGPTから返ってきたJSONをid照合でマージ
+      const mergeJsonAnalysis = (textId, importedSentences) => {
+        setTexts(prev => prev.map(t => {
+          if (t.id !== textId) return t;
+          const map = {};
+          importedSentences.forEach(s => { map[s.id] = s; });
+          return {
+            ...t,
+            sentences: t.sentences.map(s => {
+              const imp = map[s.id];
+              if (!imp) return s;
+              return {
+                ...s,
+                analysis: imp.analysis || s.analysis,
+                translation: imp.translation || s.translation,
+              };
+            })
+          };
+        }));
+      };
+
+      const activeText = texts.find(t => t.id === activeId) || null;
+
+      // ナビゲーションラベル
+      const navItems = [
+        { key:'home',  label:'ホーム', Icon:Ico.Home },
+        { key:'import',label:'追加',   Icon:Ico.Plus },
+        { key:'list',  label:'一覧',   Icon:Ico.List },
+        { key:'vocab', label:'単語帳', Icon:Ico.Star },
+      ];
+
+      return (
+        <div style={{ minHeight:'100vh', background:C.bg, fontFamily:"'Georgia','Hiragino Mincho ProN','Yu Mincho',serif", color:C.dark }}>
+          {/* Header */}
+          <header style={{ background:C.dark, color:'#f5f0e8', padding:'0 20px', display:'flex', alignItems:'center', justifyContent:'space-between', height:54, position:'sticky', top:0, zIndex:100, boxShadow:'0 2px 12px rgba(0,0,0,0.3)' }}>
+            <span style={{ fontSize:16, letterSpacing:'0.1em' }}><span style={{ color:C.gold }}>ER</span> English Reader <span style={{ fontSize:10, color:C.muted, letterSpacing:'0.05em' }}>v2.1.0</span></span>
+            <nav style={{ display:'flex', gap:2 }}>
+              {navItems.map(({ key, label, Icon }) => (
+                <button key={key}
+                  style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:2, padding:'6px 12px', borderRadius:4, border:'none', cursor:'pointer', fontSize:10, fontFamily:'inherit', background:screen===key?C.gold:'transparent', color:screen===key?C.dark:C.gold, letterSpacing:'0.05em', transition:'all 0.15s' }}
+                  onClick={() => nav(key)}>
+                  <Icon />{label}
+                </button>
+              ))}
+            </nav>
+          </header>
+
+          {/* Main */}
+          <main style={{ maxWidth:860, margin:'0 auto', padding:'24px 16px 80px' }}>
+            {screen==='home'   && <HomeScreen texts={texts} words={words} onNav={nav} />}
+            {screen==='import' && <ImportScreen onSave={saveText} onNav={nav} />}
+            {screen==='list'   && <ListScreen texts={texts} onNav={nav} onDelete={deleteText} />}
+            {screen==='reader' && activeText && (
+              <ReaderScreen text={activeText} onOpenAnalysis={i=>setAnalysisIdx(i)} onRegisterWord={(w,s,t)=>setWordDialog({word:w,sourceSentence:s,type:t||'word'})} onQuickRegister={quickSaveWord} onImportJson={mergeJsonAnalysis} registeredWords={words} />
+            )}
+            {screen==='vocab'  && <VocabScreen words={words} onUpdate={updateWord} onDelete={deleteWord} />}
+          </main>
+
+          {/* Modals */}
+          {analysisIdx !== null && activeText && (
+            <AnalysisModal text={activeText} initIdx={analysisIdx} onClose={() => setAnalysisIdx(null)} onUpdate={updateSentence} />
+          )}
+          {wordDialog && (
+            <WordDialog word={wordDialog.word} sourceSentence={wordDialog.sourceSentence} type={wordDialog.type||'word'} onSave={saveWord} onClose={() => setWordDialog(null)} />
+          )}
+        </div>
+      );
+    }
+
+    // Mount
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+
+    // Service Worker登録
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js').catch(() => {});
+      });
+    }
+  </script>
+</body>
+</html>
