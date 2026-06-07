@@ -61,18 +61,104 @@
     ];
     function getLevelDef(key) { return LEVELS.find(l => l.key === key) || null; }
 
-    // ─── Storage (localStorage) ──────────────────────────────────────────────
-    const STORAGE_KEYS = { texts: 'er_texts', words: 'er_words' };
+    // ─── Storage (IndexedDB) ─────────────────────────────────────────────────
+    const DB_NAME = 'er-reader-db';
+    const DB_VERSION = 1;
+    const STORE_TEXTS = 'texts';
+    const STORE_WORDS = 'words';
 
-    function loadFromStorage(key, fallback) {
-      try {
-        const raw = localStorage.getItem(key);
-        return raw ? JSON.parse(raw) : fallback;
-      } catch { return fallback; }
+    // IndexedDBを開く（Promise）
+    function openDB() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, DB_VERSION);
+        req.onupgradeneeded = e => {
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains(STORE_TEXTS)) {
+            db.createObjectStore(STORE_TEXTS, { keyPath: 'id' });
+          }
+          if (!db.objectStoreNames.contains(STORE_WORDS)) {
+            db.createObjectStore(STORE_WORDS, { keyPath: 'id' });
+          }
+        };
+        req.onsuccess = e => resolve(e.target.result);
+        req.onerror = () => reject(req.error);
+      });
     }
 
-    function saveToStorage(key, data) {
-      try { localStorage.setItem(key, JSON.stringify(data)); } catch {}
+    // ストアからすべて取得
+    function dbGetAll(storeName) {
+      return openDB().then(db => new Promise((resolve, reject) => {
+        const tx = db.transaction(storeName, 'readonly');
+        const req = tx.objectStore(storeName).getAll();
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => reject(req.error);
+      }));
+    }
+
+    // レコードを put（追加 or 更新）
+    function dbPut(storeName, record) {
+      return openDB().then(db => new Promise((resolve, reject) => {
+        const tx = db.transaction(storeName, 'readwrite');
+        tx.objectStore(storeName).put(record);
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+      }));
+    }
+
+    // レコードを delete
+    function dbDelete(storeName, id) {
+      return openDB().then(db => new Promise((resolve, reject) => {
+        const tx = db.transaction(storeName, 'readwrite');
+        tx.objectStore(storeName).delete(id);
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+      }));
+    }
+
+    // ストアを全件置き換え（配列まるごと同期）
+    function dbReplaceAll(storeName, records) {
+      return openDB().then(db => new Promise((resolve, reject) => {
+        const tx = db.transaction(storeName, 'readwrite');
+        const store = tx.objectStore(storeName);
+        store.clear();
+        records.forEach(r => store.put(r));
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+      }));
+    }
+
+    // localStorage → IndexedDB マイグレーション（初回のみ）
+    async function migrateFromLocalStorage() {
+      const MIGRATED_KEY = 'er_idb_migrated';
+      if (localStorage.getItem(MIGRATED_KEY)) return;
+      try {
+        const rawTexts = localStorage.getItem('er_texts');
+        const rawWords = localStorage.getItem('er_words');
+        if (rawTexts) {
+          const texts = JSON.parse(rawTexts);
+          if (texts.length > 0) await dbReplaceAll(STORE_TEXTS, texts);
+        }
+        if (rawWords) {
+          const words = JSON.parse(rawWords);
+          if (words.length > 0) await dbReplaceAll(STORE_WORDS, words);
+        }
+        localStorage.setItem(MIGRATED_KEY, '1');
+      } catch(e) {
+        console.warn('Migration failed:', e);
+      }
+    }
+
+    // 初期データをIndexedDBからロード（マイグレーション付き）
+    async function loadInitialData() {
+      await migrateFromLocalStorage();
+      const [texts, words] = await Promise.all([
+        dbGetAll(STORE_TEXTS),
+        dbGetAll(STORE_WORDS),
+      ]);
+      // createdAt降順でソート
+      texts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+      words.sort((a, b) => new Date(b.registeredAt) - new Date(a.registeredAt));
+      return { texts, words };
     }
 
     // ─── Utility ────────────────────────────────────────────────────────────
@@ -1527,12 +1613,18 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
       const [wordDialog, setWordDialog] = useState(null);
       const [history, setHistory] = useState([]); // 履歴スタック [{screen, activeId}]
 
-      const [texts, setTexts] = useState(() => loadFromStorage(STORAGE_KEYS.texts, []));
-      const [words, setWords] = useState(() => loadFromStorage(STORAGE_KEYS.words, []));
+      const [texts, setTexts] = useState([]);
+      const [words, setWords] = useState([]);
+      const [dbReady, setDbReady] = useState(false);
 
-      // localStorage同期
-      useEffect(() => saveToStorage(STORAGE_KEYS.texts, texts), [texts]);
-      useEffect(() => saveToStorage(STORAGE_KEYS.words, words), [words]);
+      // 起動時：IndexedDBからロード（localStorage自動マイグレーション含む）
+      useEffect(() => {
+        loadInitialData().then(({ texts: t, words: w }) => {
+          setTexts(t);
+          setWords(w);
+          setDbReady(true);
+        }).catch(() => setDbReady(true));
+      }, []);
 
       const nav = (target, id) => {
         if (id) {
@@ -1568,27 +1660,60 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
         }
       };
 
-      const saveText = t => setTexts(prev => { const ex = prev.find(x=>x.id===t.id); return ex ? prev.map(x=>x.id===t.id?t:x) : [t,...prev]; });
-      const deleteText = id => { setTexts(prev=>prev.filter(t=>t.id!==id)); if (activeId===id) setScreen('list'); };
+      const saveText = t => {
+        setTexts(prev => {
+          const ex = prev.find(x=>x.id===t.id);
+          const next = ex ? prev.map(x=>x.id===t.id?t:x) : [t,...prev];
+          dbPut(STORE_TEXTS, t);
+          return next;
+        });
+      };
+      const deleteText = id => {
+        setTexts(prev=>prev.filter(t=>t.id!==id));
+        dbDelete(STORE_TEXTS, id);
+        if (activeId===id) setScreen('list');
+      };
       const updateSentence = (textId, si, analysis, translation) => {
-        setTexts(prev => prev.map(t => t.id===textId ? { ...t, sentences:t.sentences.map((s,i)=>i===si?{...s,analysis,translation}:s) } : t));
+        setTexts(prev => prev.map(t => {
+          if (t.id !== textId) return t;
+          const updated = { ...t, sentences: t.sentences.map((s,i)=>i===si?{...s,analysis,translation}:s) };
+          dbPut(STORE_TEXTS, updated);
+          return updated;
+        }));
       };
       // 英文の難易度を更新
       const updateTextLevel = (textId, level) => {
-        setTexts(prev => prev.map(t => t.id===textId ? { ...t, level } : t));
+        setTexts(prev => prev.map(t => {
+          if (t.id !== textId) return t;
+          const updated = { ...t, level };
+          dbPut(STORE_TEXTS, updated);
+          return updated;
+        }));
       };
       const saveWord = ({ word, meaning, sourceSentence, proficiency, registeredAt, type }) => {
-        setWords(prev => [{ id:generateId(), word, meaning, sourceSentence, proficiency, registeredAt, type: type||'word' }, ...prev]);
+        const newW = { id:generateId(), word, meaning, sourceSentence, proficiency, registeredAt, type: type||'word' };
+        setWords(prev => [newW, ...prev]);
+        dbPut(STORE_WORDS, newW);
         setWordDialog(null);
       };
       const quickSaveWord = (word, sourceSentence, type = 'word', meaning = '', level = '') => {
-        setWords(prev => [{ id:generateId(), word, meaning, sourceSentence, proficiency:'未学習', registeredAt:nowIso(), type, level }, ...prev]);
+        const newW = { id:generateId(), word, meaning, sourceSentence, proficiency:'未学習', registeredAt:nowIso(), type, level };
+        setWords(prev => [newW, ...prev]);
+        dbPut(STORE_WORDS, newW);
       };
       const updateWord = (updated, isNew) => {
-        if (isNew) setWords(prev => [updated, ...prev]);
-        else setWords(prev => prev.map(w => w.id===updated.id ? updated : w));
+        if (isNew) {
+          setWords(prev => [updated, ...prev]);
+          dbPut(STORE_WORDS, updated);
+        } else {
+          setWords(prev => prev.map(w => w.id===updated.id ? updated : w));
+          dbPut(STORE_WORDS, updated);
+        }
       };
-      const deleteWord = id => setWords(prev => prev.filter(w => w.id!==id));
+      const deleteWord = id => {
+        setWords(prev => prev.filter(w => w.id!==id));
+        dbDelete(STORE_WORDS, id);
+      };
 
       // ChatGPTから返ってきたJSONをid照合でマージ（levelも取り込む）
       const mergeJsonAnalysis = (textId, importedSentences, importedLevel) => {
@@ -1596,19 +1721,17 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
           if (t.id !== textId) return t;
           const map = {};
           importedSentences.forEach(s => { map[s.id] = s; });
-          return {
+          const updated = {
             ...t,
             level: importedLevel || t.level || '',
             sentences: t.sentences.map(s => {
               const imp = map[s.id];
               if (!imp) return s;
-              return {
-                ...s,
-                analysis: imp.analysis || s.analysis,
-                translation: imp.translation || s.translation,
-              };
+              return { ...s, analysis: imp.analysis || s.analysis, translation: imp.translation || s.translation };
             })
           };
+          dbPut(STORE_TEXTS, updated);
+          return updated;
         }));
       };
 
@@ -1626,7 +1749,7 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
         <div style={{ minHeight:'100vh', background:C.bg, fontFamily:"'Georgia','Hiragino Mincho ProN','Yu Mincho',serif", color:C.dark }}>
           {/* Header */}
           <header style={{ background:C.dark, color:'#f5f0e8', padding:'0 20px', display:'flex', alignItems:'center', justifyContent:'space-between', height:54, position:'sticky', top:0, zIndex:100, boxShadow:'0 2px 12px rgba(0,0,0,0.3)' }}>
-            <span style={{ fontSize:16, letterSpacing:'0.1em' }}><span style={{ color:C.gold }}>ER</span> English Reader <span style={{ fontSize:10, color:C.muted, letterSpacing:'0.05em' }}>v2.5.1</span></span>
+            <span style={{ fontSize:16, letterSpacing:'0.1em' }}><span style={{ color:C.gold }}>ER</span> English Reader <span style={{ fontSize:10, color:C.muted, letterSpacing:'0.05em' }}>v2.6.0</span></span>
             <nav style={{ display:'flex', gap:2 }}>
               {navItems.map(({ key, label, Icon }) => (
                 <button key={key}
@@ -1640,6 +1763,12 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
 
           {/* Main */}
           <main style={{ maxWidth:860, margin:'0 auto', padding:'24px 16px 80px' }}>
+            {!dbReady ? (
+              <div style={{ textAlign:'center', padding:60, color:C.muted }}>
+                <div style={{ fontSize:32, marginBottom:12 }}>📖</div>
+                <div style={{ fontSize:14 }}>データを読み込んでいます…</div>
+              </div>
+            ) : (<>
             {screen==='home'   && <HomeScreen texts={texts} words={words} onNav={nav} />}
             {screen==='import' && <ImportScreen onSave={saveText} onNav={nav} />}
             {screen==='list'   && <ListScreen texts={texts} onNav={nav} onDelete={deleteText} />}
@@ -1654,6 +1783,7 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
               </div>
             )}
             {screen==='vocab'  && <VocabScreen words={words} onUpdate={updateWord} onDelete={deleteWord} />}
+            </>)}
           </main>
 
           {/* Modals */}

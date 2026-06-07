@@ -1,24 +1,35 @@
-// ─── キャッシュバージョン（ファイル保存時刻で自動更新） ───────────────────
-// 注意: このタイムスタンプはファイルを保存するたびに自動で変わるため
-//       手動で変更する必要はありません。
-const CACHE_NAME = 'er-reader-20250602095300';
+const CACHE_NAME = 'er-reader-20250608120000';
 
 // ベースパスを動的に取得（GitHub Pagesのサブパスに対応）
 const BASE = self.registration.scope;
 
-const ASSETS = [
+const LOCAL_ASSETS = [
   BASE,
   BASE + 'index.html',
   BASE + 'manifest.json',
+];
+
+const CDN_ASSETS = [
   'https://unpkg.com/react@18/umd/react.production.min.js',
   'https://unpkg.com/react-dom@18/umd/react-dom.production.min.js',
-  'https://unpkg.com/@babel/standalone/babel.min.js'
+  'https://unpkg.com/@babel/standalone/babel.min.js',
 ];
 
 // インストール時にキャッシュ
 self.addEventListener('install', event => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS))
+    caches.open(CACHE_NAME).then(cache =>
+      Promise.all([
+        // ローカルはネットワークから取得してキャッシュ
+        Promise.all(LOCAL_ASSETS.map(url =>
+          fetch(url, { cache: 'no-cache' })
+            .then(res => cache.put(url, res))
+            .catch(() => {})
+        )),
+        // CDNはキャッシュに追加
+        cache.addAll(CDN_ASSETS).catch(() => {}),
+      ])
+    )
   );
   self.skipWaiting();
 });
@@ -33,37 +44,16 @@ self.addEventListener('activate', event => {
   self.clients.claim();
 });
 
-// ─── ネットワーク優先戦略 ────────────────────────────────────────────────
-// index.html / manifest.json は常にネットワークから最新版を取得し、
-// 失敗時のみキャッシュにフォールバックする。
-// CDNリソース（React等）はキャッシュ優先でオフライン対応を維持する。
+// フェッチ戦略：
+//   ローカルファイル → ネットワーク優先（最新を取得、失敗時はキャッシュ）
+//   CDNファイル     → キャッシュ優先（オフライン対応）
 self.addEventListener('fetch', event => {
-  const url = new URL(event.request.url);
-  const isLocal = url.origin === location.origin;
+  const url = event.request.url;
+  const isLocal = url.startsWith(BASE) || url.includes('index.html') || url.includes('manifest.json');
+  const isCDN = url.includes('unpkg.com') || url.includes('cdnjs.cloudflare.com');
 
-  if (isLocal) {
-    // ローカルファイル（index.html, manifest.json 等）→ ネットワーク優先
-    event.respondWith(
-      fetch(event.request)
-        .then(response => {
-          if (response && response.status === 200) {
-            const clone = response.clone();
-            caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
-          }
-          return response;
-        })
-        .catch(() => {
-          // オフライン時はキャッシュから返す
-          return caches.match(event.request).then(cached => {
-            if (cached) return cached;
-            if (event.request.mode === 'navigate') {
-              return caches.match(BASE + 'index.html');
-            }
-          });
-        })
-    );
-  } else {
-    // CDNリソース（React等）→ キャッシュ優先（オフライン対応）
+  if (isCDN) {
+    // CDN: キャッシュ優先
     event.respondWith(
       caches.match(event.request).then(cached => {
         if (cached) return cached;
@@ -74,6 +64,34 @@ self.addEventListener('fetch', event => {
           }
           return response;
         });
+      })
+    );
+  } else if (isLocal) {
+    // ローカル: ネットワーク優先（常に最新を取得）
+    event.respondWith(
+      fetch(event.request, { cache: 'no-cache' })
+        .then(response => {
+          if (response && response.status === 200) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+          }
+          return response;
+        })
+        .catch(() => {
+          return caches.match(event.request).then(cached => {
+            if (cached) return cached;
+            if (event.request.mode === 'navigate') {
+              return caches.match(BASE + 'index.html');
+            }
+          });
+        })
+    );
+  } else {
+    // その他: キャッシュ優先
+    event.respondWith(
+      caches.match(event.request).then(cached => {
+        if (cached) return cached;
+        return fetch(event.request).catch(() => {});
       })
     );
   }
