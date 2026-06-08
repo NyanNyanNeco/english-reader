@@ -900,14 +900,55 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
       return '';
     }
 
+    // 行頭のイディオムパターンを検出：「英語フレーズ（複数単語可）:」
+    // 例: "compensate for:" "take it for granted:" → {phrase, meaning}
+    function detectIdiomInLine(line) {
+      // パターン: 行頭（空白可）から英字・スペース・アポストロフィのみで構成される
+      // 1語以上のフレーズ + コロン（:）
+      const m = line.match(/^\s*([A-Za-z][A-Za-z '''\-]*[A-Za-z])\s*[:：]/);
+      if (!m) return null;
+      const phrase = m[1].trim();
+      // スペースを含む（複数単語）場合のみイディオムとして扱う
+      if (!phrase.includes(' ')) return null;
+      // コロン後ろの説明から意味を抽出
+      const afterColon = line.slice(m[0].length);
+      const meaning = (afterColon.match(/[（(「]([^）)」]+)[）)」]/) || afterColon.match(/^\s*(.+)/))?.[1]?.trim() || '';
+      return { phrase, meaning };
+    }
+
     // 解説テキストをタップ可能なトークンとして描画するコンポーネント
     function TappableAnalysis({ analysisText, onWordTap }) {
       if (!analysisText) return null;
-      // 行ごとに分割して処理
       const lines = analysisText.split('\n');
       return (
         <div style={{ fontSize:13, lineHeight:2.1, color:'#3a2a10' }}>
           {lines.map((line, li) => {
+            // イディオム行の検出
+            const idiom = detectIdiomInLine(line);
+            if (idiom) {
+              // イディオムフレーズ部分をハイライト表示し、タップでイディオム登録
+              const colonIdx = line.indexOf(idiom.phrase) + idiom.phrase.length;
+              const rest = line.slice(colonIdx); // コロン以降
+              return (
+                <div key={li}>
+                  <span
+                    onClick={e => { e.stopPropagation(); onWordTap(idiom.phrase, idiom.meaning, 'idiom'); }}
+                    style={{
+                      cursor:'pointer', borderRadius:3, padding:'1px 2px', display:'inline',
+                      borderBottom:'2px solid #9a7acd', color:'#4a3a7a', fontWeight:'bold',
+                      transition:'background 0.12s',
+                      WebkitTapHighlightColor:'rgba(154,122,205,0.35)',
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.background='#f0ecfa'; }}
+                    onMouseLeave={e => { e.currentTarget.style.background='transparent'; }}
+                  >{idiom.phrase}</span>
+                  <span style={{ whiteSpace:'pre-wrap', fontSize:11, color:C.muted }}> ✦イディオム</span>
+                  <span style={{ whiteSpace:'pre-wrap' }}>{rest}</span>
+                </div>
+              );
+            }
+
+            // 通常行：単語単位でタップ可能
             const tokens = line.match(/[A-Za-z''\-]+|[^A-Za-z''\-]+/g) || [line];
             let pos = 0;
             return (
@@ -924,17 +965,12 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
                       key={ti}
                       onClick={e => {
                         e.stopPropagation();
-                        // 行内でのオフセットを使って意味を抽出
                         const meaning = extractMeaningNear(line, tokenStart, tokenStart + token.length);
-                        onWordTap(clean, meaning);
+                        onWordTap(clean, meaning, 'word');
                       }}
                       style={{
-                        cursor:'pointer',
-                        borderRadius:3,
-                        padding:'1px 0',
-                        display:'inline',
-                        borderBottom:'2px solid transparent',
-                        transition:'background 0.12s',
+                        cursor:'pointer', borderRadius:3, padding:'1px 0', display:'inline',
+                        borderBottom:'2px solid transparent', transition:'background 0.12s',
                         WebkitTapHighlightColor:'rgba(200,169,110,0.35)',
                       }}
                       onMouseEnter={e => { e.currentTarget.style.background='#faecd0'; e.currentTarget.style.borderBottomColor=C.gold; }}
@@ -946,6 +982,35 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
             );
           })}
         </div>
+      );
+    }
+
+    // 本文英文用：単語タップ登録（種別：単語、意味：空欄）
+    function TappableText({ text, onWordTap }) {
+      if (!text) return null;
+      const tokens = text.match(/[A-Za-z''\-]+|[^A-Za-z''\-]+/g) || [text];
+      return (
+        <span>
+          {tokens.map((token, ti) => {
+            if (!/[A-Za-z]/.test(token)) {
+              return <span key={ti} style={{ whiteSpace:'pre-wrap' }}>{token}</span>;
+            }
+            const clean = token.replace(/^['']+|['']+$/g, '');
+            return (
+              <span
+                key={ti}
+                onClick={e => { e.stopPropagation(); onWordTap(clean, '', 'word'); }}
+                style={{
+                  cursor:'pointer', borderRadius:3, padding:'1px 0', display:'inline',
+                  borderBottom:'2px solid transparent', transition:'background 0.12s',
+                  WebkitTapHighlightColor:'rgba(200,169,110,0.35)',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.background='#faecd0'; e.currentTarget.style.borderBottomColor=C.gold; }}
+                onMouseLeave={e => { e.currentTarget.style.background='transparent'; e.currentTarget.style.borderBottomColor='transparent'; }}
+              >{token}</span>
+            );
+          })}
+        </span>
       );
     }
 
@@ -984,8 +1049,8 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
 
       const handleSave = () => { onUpdate(text.id, idx, editA, editT); setEditing(false); };
 
-      const handleWordTap = (word, meaning) => {
-        setTapWord({ word, meaning, type: 'word', level: '' });
+      const handleWordTap = (word, meaning, type = 'word') => {
+        setTapWord({ word, meaning, type, level: '' });
       };
 
       const handleQuickRegister = () => {
@@ -1003,9 +1068,15 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
               <button style={{ background:'none', border:'none', cursor:'pointer', color:C.muted }} onClick={onClose}><Ico.X /></button>
             </div>
 
-            <div style={{ padding:'13px 15px', background:'#f5ede0', borderRadius:4, marginBottom:18, fontSize:15, lineHeight:1.9, borderLeft:`3px solid ${C.gold}` }}>
-              {s.text}
+            <div style={{ padding:'13px 15px', background:'#f5ede0', borderRadius:4, marginBottom:4, fontSize:15, lineHeight:1.9, borderLeft:`3px solid ${C.gold}` }}>
+              {editing
+                ? s.text
+                : <TappableText text={s.text} onWordTap={handleWordTap} />
+              }
             </div>
+            {!editing && (
+              <div style={{ fontSize:10, color:C.muted, letterSpacing:'0.06em', marginBottom:14, paddingLeft:2 }}>▶ 本文の単語をタップして単語帳に登録</div>
+            )}
 
             {editing ? (
               <>
@@ -1765,7 +1836,7 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
         <div style={{ minHeight:'100vh', background:C.bg, fontFamily:"'Georgia','Hiragino Mincho ProN','Yu Mincho',serif", color:C.dark }}>
           {/* Header */}
           <header style={{ background:C.dark, color:'#f5f0e8', padding:'0 20px', display:'flex', alignItems:'center', justifyContent:'space-between', height:54, position:'sticky', top:0, zIndex:100, boxShadow:'0 2px 12px rgba(0,0,0,0.3)' }}>
-            <span style={{ fontSize:16, letterSpacing:'0.1em' }}><span style={{ color:C.gold }}>ER</span> English Reader <span style={{ fontSize:10, color:C.muted, letterSpacing:'0.05em' }}>v2.9.1</span></span>
+            <span style={{ fontSize:16, letterSpacing:'0.1em' }}><span style={{ color:C.gold }}>ER</span> English Reader <span style={{ fontSize:10, color:C.muted, letterSpacing:'0.05em' }}>v2.10.0</span></span>
             <nav style={{ display:'flex', gap:2 }}>
               {navItems.map(({ key, label, Icon }) => (
                 <button key={key}
