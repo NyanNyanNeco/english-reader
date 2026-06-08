@@ -1,4 +1,4 @@
-const CACHE_NAME = 'er-reader-20260608083000';
+const CACHE_NAME = 'er-reader-20260608090000';
 
 // ベースパスを動的に取得（GitHub Pagesのサブパスに対応）
 const BASE = self.registration.scope;

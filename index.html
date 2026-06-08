@@ -254,14 +254,12 @@
 
     // ─── Import ──────────────────────────────────────────────────────────────
     function ImportScreen({ onSave, onNav }) {
-      // Geminiモーダル
       const [showGemini, setShowGemini] = useState(false);
       const [aiBody, setAiBody] = useState('');
       const [aiBodyError, setAiBodyError] = useState(false);
       const [aiCopied, setAiCopied] = useState(false);
       const [aiJson, setAiJson] = useState('');
       const [aiJsonError, setAiJsonError] = useState('');
-      // 手動入力（折りたたみ）
       const [showManual, setShowManual] = useState(false);
       const [title, setTitle] = useState('');
       const [source, setSource] = useState('');
@@ -269,85 +267,6 @@
       const [level, setLevel] = useState('');
       const fileRef = useRef();
 
-      // プロンプト生成
-      const buildPrompt = (bodyText) => {
-        const sentences = splitSentences(bodyText);
-        const sentencesJson = JSON.stringify(
-          sentences.map((s, i) => ({ id: i, text: s, analysis: '', translation: '' })),
-          null, 2
-        );
-        const backtick = '`';
-        return [
-          '以下の英文について、各文の構文解説（analysis）と日本語訳（translation）を記入し、JSON形式でそのまま返してください。',
-          '',
-          '【出力形式の厳守事項】',
-          '- 返答はJSONのみ。説明文・マークダウンのコードブロック（' + backtick + backtick + backtick + 'json等）は一切含めないこと',
-          '- 必ず下記JSONの構造を維持し、id・textは変更しないこと',
-          '- 最上位に "title"・"source"・"level"・"sentences" の4フィールドを含めること',
-          '- "title" は英文の内容から適切なタイトルを日本語または英語で類推して付与すること',
-          '',
-          '【levelフィールド】',
-          '以下から1つ選んで設定:',
-          '"入門"（中学基礎）, "基礎"（中学修了）, "標準"（高校基礎・センター試験）, "上級"（高校修了・大学入試）, "難関"（TOEFL・英検1級）, "最難関"（ネイティブ・学術論文）',
-          '',
-          '【analysisの記述形式】',
-          '1行目: 文型（例: SVO）を一言で説明',
-          'S (主語): 該当箇所 （日本語訳）',
-          'V (動詞): 該当箇所 （時制・態など）',
-          'O (目的語) / C (補語): 該当箇所 （日本語訳） ※該当する場合のみ',
-          '修飾語: 該当箇所 （日本語訳） ※該当する場合のみ',
-          '【ポイント】',
-          '注目すべき語法・文法事項を箇条書きで2〜4点',
-          '',
-          '【入力JSON】',
-          '{',
-          '  "title": "",',
-          '  "source": "",',
-          '  "level": "",',
-          '  "sentences": ' + sentencesJson,
-          '}'
-        ].join('\n');
-      };
-
-      // プロンプトをコピー
-      const handleCopyPrompt = () => {
-        if (!aiBody.trim()) { setAiBodyError(true); return; }
-        setAiBodyError(false);
-        const prompt = buildPrompt(aiBody);
-        navigator.clipboard.writeText(prompt).then(() => {
-          setAiCopied(true);
-          setTimeout(() => setAiCopied(false), 3000);
-        }).catch(() => {
-          setAiCopied(true);
-          setTimeout(() => setAiCopied(false), 3000);
-        });
-      };
-
-      // JSON貼り付けで取り込む
-      const handleLoadJson = () => {
-        if (!aiJson.trim()) { setAiJsonError('JSONを貼り付けてください。'); return; }
-        try {
-          const cleaned = aiJson.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
-          const data = JSON.parse(cleaned);
-          if (!data.sentences) throw new Error('sentencesフィールドがありません');
-          const text = {
-            id: generateId(),
-            title: data.title || '（タイトル未設定）',
-            source: data.source || '',
-            level: data.level || '',
-            sentences: data.sentences.map((s, i) => ({ id: i, text: s.text || '', analysis: s.analysis || '', translation: s.translation || '' })),
-            createdAt: nowIso(),
-            lastViewedAt: nowIso(),
-          };
-          onSave(text);
-          setShowGemini(false);
-          onNav('reader', text.id);
-        } catch(err) {
-          setAiJsonError('読み込み失敗: ' + err.message + ' — GeminiのJSON出力をそのまま貼り付けてください。');
-        }
-      };
-
-      // 手動保存
       const handleSave = () => {
         if (!body.trim()) return alert('英文を入力してください。');
         const sentences = splitSentences(body);
@@ -360,8 +279,33 @@
         if (!body.trim()) return alert('英文を入力してください。');
         const sentences = splitSentences(body);
         const tmpl = {
-          _instruction: '各sentenceのanalysis（構文解説）とtranslation（日本語訳）を記入し、levelフィールドに難易度を設定してください。他フィールドは変更せずにJSONを返してください。',
-          title: title || '（未入力）', source: source || '', level: level || '',
+          _instruction: '各sentenceのanalysis（構文解説）とtranslation（日本語訳）を記入し、levelフィールドにこの英文全体の難易度を設定してください。他フィールドは変更せずにJSONを返してください。analysisは下記_promptの形式に従って記述してください。',
+          _prompt: `以下の英文各文について、analysisフィールドに下記の形式で構文解説を記入し、translationフィールドに日本語訳を記入してください。
+またJSON最上位の"level"フィールドに、この英文全体の難易度を以下から1つ選んで設定してください：
+"入門"（中学基礎）, "基礎"（中学修了）, "標準"（高校基礎・センター試験）, "上級"（高校修了・大学入試）, "難関"（TOEFL・英検1級）, "最難関"（ネイティブ・学術論文）
+
+【analysisの記述形式】
+1行目: この文の文型（例: SVO、SVC など）を一言で説明する。
+続けて各要素を列挙:
+S (主語): 該当箇所 （日本語訳）
+V (動詞): 該当箇所 （補足: 時制・態など）
+O (目的語) / C (補語): 該当箇所 （日本語訳） ※該当する場合のみ
+修飾語: 該当箇所 （日本語訳） ※該当する場合のみ
+【ポイント】
+注目すべき語法・表現・文法事項を箇条書きで2〜4点記述する。
+例）
+この英文はSVO（主語＋動詞＋目的語）で構成されています。
+S (主語): A runner （一人のランナー）
+V (動詞): has finally broken （ついに破った）※現在完了形（結果）
+O (目的語): the two-hour barrier （2時間の壁）
+修飾語: for the marathon （マラソンにおける）
+【ポイント】
+finally: 「ついに」という意味で、長年の悲願達成を強調します。
+現在完了形 (has broken): 過去の出来事が現在も事実として残っているニュアンスを表します。
+barrier: 記録や達成が困難とされる「限界・基準」を比喩的に表す表現です。`,
+          title: title || '（未入力）',
+          source: source || '',
+          level: level || '',
           sentences: sentences.map((s,i) => ({ id:i, text:s, analysis:'', translation:'' }))
         };
         const blob = new Blob([JSON.stringify(tmpl, null, 2)], { type:'application/json' });
@@ -387,6 +331,64 @@
         e.target.value = '';
       };
 
+      const handleCopyPrompt = () => {
+        if (!aiBody.trim()) { setAiBodyError(true); return; }
+        setAiBodyError(false);
+        const sentences = splitSentences(aiBody);
+        const sJson = JSON.stringify(sentences.map((s,i)=>({id:i,text:s,analysis:'',translation:''})),null,2);
+        const lines = [
+          '以下の英文について、各文の構文解説（analysis）と日本語訳（translation）を記入し、JSON形式でそのまま返してください。',
+          '',
+          '【出力形式の厳守事項】',
+          '- 返答はJSONのみ。説明文やコードブロック記号は含めないこと',
+          '- 必ず下記JSONの構造を維持し、id・textは変更しないこと',
+          '- 最上位に "title"・"source"・"level"・"sentences" の4フィールドを含めること',
+          '- "title" は英文の内容から適切なタイトルを類推して付与すること',
+          '',
+          '【levelフィールド】以下から1つ選んで設定:',
+          '"入門"（中学基礎）,"基礎"（中学修了）,"標準"（高校基礎）,"上級"（大学入試）,"難関"（英検1級）,"最難関"（学術論文）',
+          '',
+          '【analysisの記述形式】',
+          '1行目: 文型（例: SVO）を一言で説明',
+          'S (主語): 該当箇所 （日本語訳）',
+          'V (動詞): 該当箇所 （時制・態など）',
+          'O/C: 該当箇所 （日本語訳） ※該当する場合のみ',
+          '修飾語: 該当箇所 （日本語訳） ※該当する場合のみ',
+          '【ポイント】語法・文法事項を箇条書きで2〜4点',
+          '',
+          '【入力JSON】',
+          '{',
+          '  "title": "",',
+          '  "source": "",',
+          '  "level": "",',
+          '  "sentences": ' + sJson,
+          '}'
+        ];
+        const prompt = lines.join('\n');
+        navigator.clipboard.writeText(prompt).then(() => {
+          setAiCopied(true);
+          setTimeout(() => setAiCopied(false), 3000);
+        }).catch(() => {
+          setAiCopied(true);
+          setTimeout(() => setAiCopied(false), 3000);
+        });
+      };
+
+      const handleLoadJson = () => {
+        if (!aiJson.trim()) { setAiJsonError('JSONを貼り付けてください。'); return; }
+        try {
+          const cleaned = aiJson.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'').trim();
+          const data = JSON.parse(cleaned);
+          if (!data.sentences) throw new Error('sentencesフィールドがありません');
+          const text = { id:generateId(), title:data.title||'（タイトル未設定）', source:data.source||'', level:data.level||'', sentences:data.sentences.map((s,i)=>({id:i,text:s.text||'',analysis:s.analysis||'',translation:s.translation||''})), createdAt:nowIso(), lastViewedAt:nowIso() };
+          onSave(text);
+          setShowGemini(false);
+          onNav('reader', text.id);
+        } catch(err) {
+          setAiJsonError('読み込み失敗: ' + err.message);
+        }
+      };
+
       const cnt = aiBody ? splitSentences(aiBody).length : 0;
       const manualCnt = body ? splitSentences(body).length : 0;
 
@@ -394,25 +396,18 @@
         <div>
           <p style={secTitle}>英文を追加</p>
 
-          {/* ── メイン：AI取り込みボタン ── */}
           <div style={{ ...card, background:'linear-gradient(135deg,#1a2e20 0%,#2a4a30 100%)', border:'none', marginBottom:14 }}>
             <div style={{ fontSize:10, letterSpacing:'0.18em', color:'#8ac8aa', marginBottom:8 }}>RECOMMENDED</div>
             <div style={{ fontSize:16, color:'#f0faf4', fontWeight:'bold', marginBottom:6 }}>🤖 AIで取り込む</div>
-            <div style={{ fontSize:12, color:'#a0c8b0', lineHeight:1.8, marginBottom:16 }}>
-              英文を貼り付け→プロンプトをコピー→Geminiで生成→JSON返答を貼り付けるだけ。
-            </div>
-            <button
-              style={{ ...btn.primary, background:'#2a7a4a', border:'1px solid #4aaa6a', fontSize:14, padding:'12px 24px' }}
-              onClick={() => { setShowGemini(true); setAiBody(''); setAiCopied(false); setAiJson(''); setAiBodyError(false); setAiJsonError(''); }}
-            >🤖 AIで取り込む</button>
+            <div style={{ fontSize:12, color:'#a0c8b0', lineHeight:1.8, marginBottom:16 }}>英文を貼り付け → プロンプトをコピー → Geminiで生成 → JSON返答を貼り付けるだけ。</div>
+            <button style={{ ...btn.primary, background:'#2a7a4a', border:'1px solid #4aaa6a', fontSize:14, padding:'12px 24px' }}
+              onClick={() => { setShowGemini(true); setAiBody(''); setAiCopied(false); setAiJson(''); setAiBodyError(false); setAiJsonError(''); }}>
+              🤖 AIで取り込む
+            </button>
           </div>
 
-          {/* ── サブ：手動入力（折りたたみ） ── */}
           <div style={card}>
-            <button
-              onClick={() => setShowManual(v => !v)}
-              style={{ width:'100%', display:'flex', justifyContent:'space-between', alignItems:'center', background:'none', border:'none', cursor:'pointer', fontFamily:'inherit', padding:0 }}
-            >
+            <button onClick={() => setShowManual(v=>!v)} style={{ width:'100%', display:'flex', justifyContent:'space-between', alignItems:'center', background:'none', border:'none', cursor:'pointer', fontFamily:'inherit', padding:0 }}>
               <span style={{ fontSize:13, color:C.brown, fontWeight:'bold' }}>📝 手動入力 / ChatGPT連携</span>
               <span style={{ fontSize:12, color:C.muted }}>{showManual ? '▲ 閉じる' : '▼ 開く'}</span>
             </button>
@@ -442,71 +437,53 @@
             )}
           </div>
 
-          {/* ── Geminiモーダル ── */}
           {showGemini && (
             <div style={overlay} onClick={() => setShowGemini(false)}>
-              <div style={{ ...modalBox, maxWidth:680 }} onClick={e => e.stopPropagation()}>
-
-                {/* ヘッダー */}
+              <div style={{ ...modalBox, maxWidth:680 }} onClick={e=>e.stopPropagation()}>
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 }}>
                   <div style={{ fontSize:15, fontWeight:'bold', color:C.dark }}>🤖 AIで取り込む</div>
                   <button style={{ background:'none', border:'none', cursor:'pointer', color:C.muted }} onClick={() => setShowGemini(false)}><Ico.X /></button>
                 </div>
 
-                {/* STEP 1 */}
                 <div style={{ padding:'14px 16px', background:'#eef7f2', borderRadius:8, border:'1.5px solid #8ac8aa', marginBottom:16 }}>
                   <div style={{ fontSize:12, fontWeight:'bold', color:'#2a6a4a', letterSpacing:'0.08em', marginBottom:12 }}>STEP 1　英文をGeminiに送る</div>
-
                   <div style={{ fontSize:12, color:'#3a6a4a', marginBottom:8 }}>① 英文をここに貼り付ける</div>
                   <textarea
                     style={{ ...tex, minHeight:130, marginBottom:10, borderColor: aiBodyError ? '#d45a5a' : '#b0ddc0', background: aiBodyError ? '#fff5f5' : '#f8fdf9' }}
                     value={aiBody}
-                    onChange={e => { setAiBody(e.target.value); if (e.target.value.trim()) setAiBodyError(false); }}
+                    onChange={e=>{ setAiBody(e.target.value); if(e.target.value.trim()) setAiBodyError(false); }}
                     placeholder="英文をここに貼り付けてください"
                   />
                   {aiBodyError && <div style={{ fontSize:12, color:'#c03030', marginBottom:8 }}>⚠ 英文を入力してください</div>}
                   {cnt > 0 && <div style={{ fontSize:11, color:C.gold, marginBottom:10 }}>→ {cnt} 文に分割されます</div>}
-
                   <div style={{ display:'flex', gap:10 }}>
-                    <button
-                      style={{ ...btn.primary, flex:1, justifyContent:'center', background: aiCopied ? '#1a5a3a' : '#2a7a4a', fontSize:13 }}
-                      onClick={handleCopyPrompt}
-                    >{aiCopied ? '✓ コピー済み！' : '📋 ②プロンプトをコピー'}</button>
-                    <a
-                      href="https://gemini.google.com"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{ ...btn.secondary, flex:1, justifyContent:'center', fontSize:13, textDecoration:'none', borderColor:'#8ac8aa', color:'#2a6a4a' }}
-                    >🔗 ③Geminiを開く</a>
+                    <button style={{ ...btn.primary, flex:1, justifyContent:'center', background: aiCopied ? '#1a5a3a' : '#2a7a4a', fontSize:13 }} onClick={handleCopyPrompt}>
+                      {aiCopied ? '✓ コピー済み！' : '📋 ②プロンプトをコピー'}
+                    </button>
+                    <a href="https://gemini.google.com" target="_blank" rel="noopener noreferrer"
+                      style={{ ...btn.secondary, flex:1, justifyContent:'center', fontSize:13, textDecoration:'none', borderColor:'#8ac8aa', color:'#2a6a4a' }}>
+                      🔗 ③Geminiを開く
+                    </a>
                   </div>
-                  {aiCopied && (
-                    <div style={{ marginTop:10, fontSize:12, color:'#2a6a4a', padding:'8px 10px', background:'#d8f0e4', borderRadius:4, lineHeight:1.7 }}>
-                      プロンプトをコピーしました。Geminiを開いて貼り付けて送信してください。
-                    </div>
-                  )}
+                  {aiCopied && <div style={{ marginTop:10, fontSize:12, color:'#2a6a4a', padding:'8px 10px', background:'#d8f0e4', borderRadius:4, lineHeight:1.7 }}>コピーしました。Geminiを開いて貼り付けて送信してください。</div>}
                 </div>
 
-                {/* 矢印 */}
                 <div style={{ textAlign:'center', fontSize:20, color:C.muted, marginBottom:16 }}>↓</div>
 
-                {/* STEP 2 */}
                 <div style={{ padding:'14px 16px', background:'#f5f0e8', borderRadius:8, border:`1.5px solid ${C.border}` }}>
                   <div style={{ fontSize:12, fontWeight:'bold', color:C.brown, letterSpacing:'0.08em', marginBottom:12 }}>STEP 2　GeminiのJSON返答を貼り付けて登録</div>
                   <div style={{ fontSize:12, color:C.brown, marginBottom:8 }}>④ GeminiのJSON出力をコピーしてここに貼り付ける</div>
                   <textarea
                     style={{ ...tex, minHeight:130, borderColor: aiJsonError ? '#d45a5a' : C.inputBorder, background: aiJsonError ? '#fff5f5' : C.inputBg }}
                     value={aiJson}
-                    onChange={e => { setAiJson(e.target.value); setAiJsonError(''); }}
-                    placeholder={"GeminiのJSON返答をここに貼り付けてください
-（コードブロックごとでも可）"}
+                    onChange={e=>{ setAiJson(e.target.value); setAiJsonError(''); }}
+                    placeholder="GeminiのJSON返答をここに貼り付けてください（コードブロックごとでも可）"
                   />
                   {aiJsonError && <div style={{ fontSize:12, color:'#c03030', marginTop:6 }}>⚠ {aiJsonError}</div>}
-                  <button
-                    style={{ ...btn.primary, marginTop:12, width:'100%', justifyContent:'center', fontSize:14, padding:'12px' }}
-                    onClick={handleLoadJson}
-                  >⑤ 読み込んで保存</button>
+                  <button style={{ ...btn.primary, marginTop:12, width:'100%', justifyContent:'center', fontSize:14, padding:'12px' }} onClick={handleLoadJson}>
+                    ⑤ 読み込んで保存
+                  </button>
                 </div>
-
               </div>
             </div>
           )}
