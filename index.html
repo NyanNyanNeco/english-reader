@@ -253,15 +253,24 @@
     }
 
     // ─── Import ──────────────────────────────────────────────────────────────
+    const GEMINI_KEY_STORAGE = 'er_gemini_api_key';
+
     function ImportScreen({ onSave, onNav }) {
       // Geminiモーダル
       const [showGemini, setShowGemini] = useState(false);
       const [aiBody, setAiBody] = useState('');
       const [aiBodyError, setAiBodyError] = useState(false);
-      const [aiPrompt, setAiPrompt] = useState('');
       const [aiCopied, setAiCopied] = useState(false);
       const [aiJson, setAiJson] = useState('');
       const [aiJsonError, setAiJsonError] = useState('');
+      // Gemini API
+      const [apiKey, setApiKey] = useState(() => localStorage.getItem(GEMINI_KEY_STORAGE) || '');
+      const [showKeyInput, setShowKeyInput] = useState(false);
+      const [apiKeyInput, setApiKeyInput] = useState('');
+      const [apiLoading, setApiLoading] = useState(false);
+      const [apiError, setApiError] = useState('');
+      const [apiPrompt, setApiPrompt] = useState('');
+      const [apiCopied, setApiCopied] = useState(false);
       // 手動入力（折りたたみ）
       const [showManual, setShowManual] = useState(false);
       const [title, setTitle] = useState('');
@@ -270,16 +279,31 @@
       const [level, setLevel] = useState('');
       const fileRef = useRef();
 
-      // Geminiプロンプト生成
-      const handleGenPrompt = () => {
-        if (!aiBody.trim()) { setAiBodyError(true); return; }
-        setAiBodyError(false);
-        const sentences = splitSentences(aiBody);
+      // APIキー保存
+      const handleSaveKey = () => {
+        const k = apiKeyInput.trim();
+        if (!k) return;
+        localStorage.setItem(GEMINI_KEY_STORAGE, k);
+        setApiKey(k);
+        setApiKeyInput('');
+        setShowKeyInput(false);
+        setApiError('');
+      };
+
+      const handleDeleteKey = () => {
+        localStorage.removeItem(GEMINI_KEY_STORAGE);
+        setApiKey('');
+        setApiKeyInput('');
+      };
+
+      // プロンプト文字列生成（共通）
+      const buildPrompt = (body) => {
+        const sentences = splitSentences(body);
         const sentencesJson = JSON.stringify(
           sentences.map((s, i) => ({ id: i, text: s, analysis: '', translation: '' })),
           null, 2
         );
-        const prompt = `以下の英文について、各文の構文解説（analysis）と日本語訳（translation）を記入し、JSON形式でそのまま返してください。
+        return `以下の英文について、各文の構文解説（analysis）と日本語訳（translation）を記入し、JSON形式でそのまま返してください。
 
 【出力形式の厳守事項】
 - 返答はJSONのみ。説明文・マークダウンのコードブロック（\`\`\`json等）は一切含めないこと
@@ -307,30 +331,79 @@ O (目的語) / C (補語): 該当箇所 （日本語訳） ※該当する場�
   "level": "",
   "sentences": ${sentencesJson}
 }`;
-        setAiPrompt(prompt);
-        setAiJson('');
-        setAiJsonError('');
       };
 
-      // プロンプトをクリップボードにコピー
+      // Gemini API直接呼び出し
+      const handleCallGemini = async () => {
+        if (!aiBody.trim()) { setAiBodyError(true); return; }
+        setAiBodyError(false);
+        if (!apiKey) { setShowKeyInput(true); setApiError('APIキーを設定してください。'); return; }
+        setApiLoading(true);
+        setApiError('');
+        setAiJson('');
+        setAiJsonError('');
+        try {
+          const prompt = buildPrompt(aiBody);
+          const res = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                contents: [{ parts: [{ text: prompt }] }],
+                generationConfig: { temperature: 0.2 }
+              })
+            }
+          );
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err?.error?.message || `HTTPエラー ${res.status}`);
+          }
+          const data = await res.json();
+          const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+          // コードブロック除去
+          const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+          const parsed = JSON.parse(cleaned);
+          if (!parsed.sentences) throw new Error('sentencesフィールドがありません');
+          const text = {
+            id: generateId(),
+            title: parsed.title || '（タイトル未設定）',
+            source: parsed.source || '',
+            level: parsed.level || '',
+            sentences: parsed.sentences.map((s, i) => ({ id: i, text: s.text || '', analysis: s.analysis || '', translation: s.translation || '' })),
+            createdAt: nowIso(),
+            lastViewedAt: nowIso(),
+          };
+          onSave(text);
+          setShowGemini(false);
+          onNav('reader', text.id);
+        } catch(err) {
+          setApiError('エラー: ' + err.message);
+          // フォールバック：手動コピペ用プロンプトを生成
+          setApiPrompt(buildPrompt(aiBody));
+        } finally {
+          setApiLoading(false);
+        }
+      };
+
+      // 手動コピー（API失敗時フォールバック）
       const handleCopyPrompt = () => {
-        if (!aiPrompt) return;
-        navigator.clipboard.writeText(aiPrompt).then(() => {
-          setAiCopied(true);
-          setTimeout(() => setAiCopied(false), 2500);
+        if (!apiPrompt) return;
+        navigator.clipboard.writeText(apiPrompt).then(() => {
+          setApiCopied(true);
+          setTimeout(() => setApiCopied(false), 2500);
         }).catch(() => {
-          const el = document.getElementById('ai-prompt-area');
+          const el = document.getElementById('api-prompt-area');
           if (el) { el.select(); document.execCommand('copy'); }
-          setAiCopied(true);
-          setTimeout(() => setAiCopied(false), 2500);
+          setApiCopied(true);
+          setTimeout(() => setApiCopied(false), 2500);
         });
       };
 
-      // GeminiのJSON返答を貼り付けて取り込む
+      // JSON手動貼り付けで取り込む（フォールバック）
       const handleLoadJson = () => {
         if (!aiJson.trim()) { setAiJsonError('JSONを貼り付けてください。'); return; }
         try {
-          // コードブロック除去（```json ... ``` や ``` ... ```）
           const cleaned = aiJson.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
           const data = JSON.parse(cleaned);
           if (!data.sentences) throw new Error('sentencesフィールドがありません');
@@ -347,7 +420,7 @@ O (目的語) / C (補語): 該当箇所 （日本語訳） ※該当する場�
           setShowGemini(false);
           onNav('reader', text.id);
         } catch(err) {
-          setAiJsonError('読み込み失敗: ' + err.message + '　／　GeminiのJSON出力をそのまま貼り付けてください。');
+          setAiJsonError('読み込み失敗: ' + err.message);
         }
       };
 
@@ -405,12 +478,18 @@ O (目的語) / C (補語): 該当箇所 （日本語訳） ※該当する場�
             <div style={{ fontSize:10, letterSpacing:'0.18em', color:'#8ac8aa', marginBottom:8 }}>RECOMMENDED</div>
             <div style={{ fontSize:16, color:'#f0faf4', fontWeight:'bold', marginBottom:6 }}>🤖 AIで取り込む</div>
             <div style={{ fontSize:12, color:'#a0c8b0', lineHeight:1.8, marginBottom:16 }}>
-              英文を貼り付けてGeminiに送るだけ。構文解説・和訳・難易度を自動生成して取り込めます。
+              英文を貼り付けるだけ。Gemini APIが構文解説・和訳・難易度を自動生成して取り込みます。
             </div>
-            <button
-              style={{ ...btn.primary, background:'#2a7a4a', border:'1px solid #4aaa6a', fontSize:14, padding:'12px 24px' }}
-              onClick={() => { setShowGemini(true); setAiBody(''); setAiPrompt(''); setAiJson(''); setAiBodyError(false); setAiJsonError(''); }}
-            >🤖 AIで取り込む</button>
+            <div style={{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap' }}>
+              <button
+                style={{ ...btn.primary, background:'#2a7a4a', border:'1px solid #4aaa6a', fontSize:14, padding:'12px 24px' }}
+                onClick={() => { setShowGemini(true); setAiBody(''); setApiError(''); setApiPrompt(''); setAiJson(''); setAiBodyError(false); setAiJsonError(''); }}
+              >🤖 AIで取り込む</button>
+              <button
+                style={{ ...btn.ghost, fontSize:11, borderColor:'rgba(200,169,110,0.4)', color:'#8ac8aa' }}
+                onClick={() => { setShowGemini(true); setShowKeyInput(true); }}
+              >⚙ APIキー設定</button>
+            </div>
           </div>
 
           {/* ── サブ：手動入力（折りたたみ） ── */}
@@ -422,12 +501,11 @@ O (目的語) / C (補語): 該当箇所 （日本語訳） ※該当する場�
               <span style={{ fontSize:13, color:C.brown, fontWeight:'bold' }}>📝 手動入力 / ChatGPT連携</span>
               <span style={{ fontSize:12, color:C.muted }}>{showManual ? '▲ 閉じる' : '▼ 開く'}</span>
             </button>
-
             {showManual && (
               <div style={{ marginTop:16 }}>
                 <div style={{ marginBottom:14 }}>
                   <label style={lbl}>タイトル（任意）</label>
-                  <input style={inp} value={title} onChange={e=>setTitle(e.target.value)} placeholder="例: The Economist — AI Policy 2026（空白時は「タイトル未設定」）" />
+                  <input style={inp} value={title} onChange={e=>setTitle(e.target.value)} placeholder="例: The Economist — AI Policy 2026" />
                 </div>
                 <div style={{ marginBottom:14 }}>
                   <label style={lbl}>出典・備考</label>
@@ -459,8 +537,40 @@ O (目的語) / C (補語): 該当箇所 （日本語訳） ※該当する場�
                   <button style={{ background:'none', border:'none', cursor:'pointer', color:C.muted }} onClick={() => setShowGemini(false)}><Ico.X /></button>
                 </div>
 
+                {/* APIキー設定エリア */}
+                <div style={{ marginBottom:14, padding:'10px 12px', background: apiKey ? '#eef7f2' : '#fff5e8', borderRadius:6, border:`1px solid ${apiKey ? '#8ac8aa' : '#e8b87a'}` }}>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                    <div style={{ fontSize:11, color: apiKey ? '#2a6a4a' : '#8a5a1a' }}>
+                      {apiKey ? '✓ Gemini APIキー設定済み' : '⚠ APIキー未設定'}
+                    </div>
+                    <button
+                      style={{ ...btn.ghost, fontSize:11, padding:'3px 10px' }}
+                      onClick={() => setShowKeyInput(v => !v)}
+                    >{showKeyInput ? '閉じる' : apiKey ? '変更' : 'APIキーを設定'}</button>
+                  </div>
+                  {showKeyInput && (
+                    <div style={{ marginTop:10 }}>
+                      <div style={{ fontSize:11, color:C.muted, marginBottom:6 }}>
+                        APIキーは端末内のみ保存され、GitHubには送信されません。
+                      </div>
+                      <div style={{ display:'flex', gap:8 }}>
+                        <input
+                          style={{ ...inp, fontSize:13, flex:1 }}
+                          type="password"
+                          value={apiKeyInput}
+                          onChange={e => setApiKeyInput(e.target.value)}
+                          placeholder="AIza... で始まるキーを入力"
+                          onKeyDown={e => e.key === 'Enter' && handleSaveKey()}
+                        />
+                        <button style={{ ...btn.primary, padding:'8px 14px', fontSize:12 }} onClick={handleSaveKey}>保存</button>
+                        {apiKey && <button style={{ ...btn.danger, padding:'8px 10px' }} onClick={handleDeleteKey}><Ico.Trash /></button>}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 {/* STEP 1: 英文貼り付け */}
-                <div style={{ marginBottom:4 }}>
+                <div style={{ marginBottom:14 }}>
                   <div style={{ fontSize:11, fontWeight:'bold', color:'#2a6a4a', letterSpacing:'0.1em', marginBottom:8 }}>STEP 1　英文を貼り付ける</div>
                   <textarea
                     style={{ ...tex, minHeight:130, borderColor: aiBodyError ? '#d45a5a' : C.inputBorder, background: aiBodyError ? '#fff5f5' : C.inputBg }}
@@ -472,45 +582,50 @@ O (目的語) / C (補語): 該当箇所 （日本語訳） ※該当する場�
                   {cnt > 0 && <div style={{ fontSize:11, color:C.gold, marginTop:4 }}>→ {cnt} 文に分割されます</div>}
                 </div>
 
-                {/* STEP 2: プロンプト生成・コピー */}
-                <div style={{ margin:'16px 0', padding:'12px 14px', background:'#eef7f2', borderRadius:6, border:'1px solid #8ac8aa' }}>
-                  <div style={{ fontSize:11, fontWeight:'bold', color:'#2a6a4a', letterSpacing:'0.1em', marginBottom:10 }}>STEP 2　プロンプトをコピーしてGeminiに送る</div>
-                  <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginBottom: aiPrompt ? 10 : 0 }}>
-                    <button
-                      style={{ ...btn.primary, background:'#2a7a4a', fontSize:13 }}
-                      onClick={handleGenPrompt}
-                    >📋 プロンプトを生成</button>
-                    {aiPrompt && (
-                      <button
-                        style={{ ...btn.secondary, borderColor: aiCopied?'#2a6a4a':'#8ac8aa', color: aiCopied?'#2a6a4a':'#4a8a6a', background: aiCopied?'#d0f0e0':'transparent', fontSize:13 }}
-                        onClick={handleCopyPrompt}
-                      >{aiCopied ? '✓ コピー済み' : '📋 コピーしてGeminiへ'}</button>
-                    )}
-                  </div>
-                  {aiPrompt && (
-                    <textarea
-                      id="ai-prompt-area"
-                      readOnly
-                      value={aiPrompt}
-                      style={{ ...tex, minHeight:120, fontSize:11, lineHeight:1.7, background:'#f8fdf9', borderColor:'#b0ddc0', color:'#1a3a2a', resize:'vertical', marginTop:4 }}
-                    />
-                  )}
-                </div>
-
-                {/* STEP 3: JSON貼り付け・取り込み */}
-                <div style={{ padding:'12px 14px', background:'#f5f0e8', borderRadius:6, border:`1px solid ${C.border}` }}>
-                  <div style={{ fontSize:11, fontWeight:'bold', color:C.brown, letterSpacing:'0.1em', marginBottom:8 }}>STEP 3　GeminiのJSON返答を貼り付けて取り込む</div>
-                  <textarea
-                    style={{ ...tex, minHeight:110, fontSize:12, borderColor: aiJsonError ? '#d45a5a' : C.inputBorder, background: aiJsonError ? '#fff5f5' : C.inputBg }}
-                    value={aiJson}
-                    onChange={e => { setAiJson(e.target.value); setAiJsonError(''); }}
-                    placeholder="GeminiのJSON返答をここに貼り付けてください（コードブロックごとでも可）"
-                  />
-                  {aiJsonError && <div style={{ fontSize:12, color:'#c03030', marginTop:4 }}>⚠ {aiJsonError}</div>}
+                {/* STEP 2: Gemini API呼び出し */}
+                <div style={{ padding:'12px 14px', background:'#eef7f2', borderRadius:6, border:'1px solid #8ac8aa', marginBottom:14 }}>
+                  <div style={{ fontSize:11, fontWeight:'bold', color:'#2a6a4a', letterSpacing:'0.1em', marginBottom:10 }}>STEP 2　Geminiで自動生成</div>
                   <button
-                    style={{ ...btn.primary, marginTop:10, width:'100%', justifyContent:'center' }}
-                    onClick={handleLoadJson}
-                  ><Ico.Up /> 読み込んで保存</button>
+                    style={{ ...btn.primary, background: apiLoading ? '#5a8a6a' : '#2a7a4a', width:'100%', justifyContent:'center', fontSize:14, padding:'12px', opacity: apiLoading ? 0.8 : 1 }}
+                    onClick={handleCallGemini}
+                    disabled={apiLoading}
+                  >
+                    {apiLoading ? '⏳ Geminiが解析中...' : '🚀 Geminiで解説・和訳を生成して取り込む'}
+                  </button>
+                  {apiError && (
+                    <div style={{ marginTop:10 }}>
+                      <div style={{ fontSize:12, color:'#c03030', marginBottom:8, padding:'6px 10px', background:'#fff5f5', borderRadius:4 }}>⚠ {apiError}</div>
+                      {/* フォールバック：手動コピペ */}
+                      {apiPrompt && (
+                        <div style={{ padding:'10px 12px', background:'#f5f0e8', borderRadius:4, border:`1px solid ${C.border}` }}>
+                          <div style={{ fontSize:11, color:C.brown, marginBottom:8 }}>手動でGeminiに貼り付ける場合：</div>
+                          <button
+                            style={{ ...btn.secondary, fontSize:12, marginBottom:8, borderColor: apiCopied?'#2a6a4a':'#8ac8aa', color: apiCopied?'#2a6a4a':'#4a8a6a', background: apiCopied?'#d0f0e0':'transparent' }}
+                            onClick={handleCopyPrompt}
+                          >{apiCopied ? '✓ コピー済み' : '📋 プロンプトをコピー'}</button>
+                          <textarea
+                            id="api-prompt-area"
+                            readOnly
+                            value={apiPrompt}
+                            style={{ ...tex, minHeight:80, fontSize:11, lineHeight:1.6, background:'#fffdf7', borderColor:C.inputBorder, color:'#3a2a10' }}
+                          />
+                          <div style={{ marginTop:10 }}>
+                            <div style={{ fontSize:11, color:C.muted, marginBottom:6 }}>GeminiのJSON返答をここに貼り付け：</div>
+                            <textarea
+                              style={{ ...tex, minHeight:90, fontSize:12, borderColor: aiJsonError ? '#d45a5a' : C.inputBorder, background: aiJsonError ? '#fff5f5' : C.inputBg }}
+                              value={aiJson}
+                              onChange={e => { setAiJson(e.target.value); setAiJsonError(''); }}
+                              placeholder="GeminiのJSON返答をここに貼り付けてください"
+                            />
+                            {aiJsonError && <div style={{ fontSize:12, color:'#c03030', marginTop:4 }}>⚠ {aiJsonError}</div>}
+                            <button style={{ ...btn.primary, marginTop:8, width:'100%', justifyContent:'center' }} onClick={handleLoadJson}>
+                              <Ico.Up /> 読み込んで保存
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
               </div>
@@ -1785,7 +1900,7 @@ O (目的語) / C (補語): 該当箇所 （日本語訳） ※該当する場�
         <div style={{ minHeight:'100vh', background:C.bg, fontFamily:"'Georgia','Hiragino Mincho ProN','Yu Mincho',serif", color:C.dark }}>
           {/* Header */}
           <header style={{ background:C.dark, color:'#f5f0e8', padding:'0 20px', display:'flex', alignItems:'center', justifyContent:'space-between', height:54, position:'sticky', top:0, zIndex:100, boxShadow:'0 2px 12px rgba(0,0,0,0.3)' }}>
-            <span style={{ fontSize:16, letterSpacing:'0.1em' }}><span style={{ color:C.gold }}>ER</span> English Reader <span style={{ fontSize:10, color:C.muted, letterSpacing:'0.05em' }}>v2.7.0</span></span>
+            <span style={{ fontSize:16, letterSpacing:'0.1em' }}><span style={{ color:C.gold }}>ER</span> English Reader <span style={{ fontSize:10, color:C.muted, letterSpacing:'0.05em' }}>v2.8.0</span></span>
             <nav style={{ display:'flex', gap:2 }}>
               {navItems.map(({ key, label, Icon }) => (
                 <button key={key}
