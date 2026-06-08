@@ -1,35 +1,18 @@
-const CACHE_NAME = 'er-reader-20250608120000';
+const CACHE_NAME = 'er-reader-20260608065246';
 
 // ベースパスを動的に取得（GitHub Pagesのサブパスに対応）
 const BASE = self.registration.scope;
 
-const LOCAL_ASSETS = [
-  BASE,
-  BASE + 'index.html',
-  BASE + 'manifest.json',
-];
-
 const CDN_ASSETS = [
   'https://unpkg.com/react@18/umd/react.production.min.js',
   'https://unpkg.com/react-dom@18/umd/react-dom.production.min.js',
-  'https://unpkg.com/@babel/standalone/babel.min.js',
+  'https://unpkg.com/@babel/standalone/babel.min.js'
 ];
 
-// インストール時にキャッシュ
+// インストール時にCDNリソースのみキャッシュ
 self.addEventListener('install', event => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then(cache =>
-      Promise.all([
-        // ローカルはネットワークから取得してキャッシュ
-        Promise.all(LOCAL_ASSETS.map(url =>
-          fetch(url, { cache: 'no-cache' })
-            .then(res => cache.put(url, res))
-            .catch(() => {})
-        )),
-        // CDNはキャッシュに追加
-        cache.addAll(CDN_ASSETS).catch(() => {}),
-      ])
-    )
+    caches.open(CACHE_NAME).then(cache => cache.addAll(CDN_ASSETS))
   );
   self.skipWaiting();
 });
@@ -44,13 +27,11 @@ self.addEventListener('activate', event => {
   self.clients.claim();
 });
 
-// フェッチ戦略：
-//   ローカルファイル → ネットワーク優先（最新を取得、失敗時はキャッシュ）
-//   CDNファイル     → キャッシュ優先（オフライン対応）
+// ローカルファイル: network-first（常に最新を取得、失敗時のみキャッシュ）
+// CDNリソース: cache-first（高速・オフライン対応）
 self.addEventListener('fetch', event => {
   const url = event.request.url;
-  const isLocal = url.startsWith(BASE) || url.includes('index.html') || url.includes('manifest.json');
-  const isCDN = url.includes('unpkg.com') || url.includes('cdnjs.cloudflare.com');
+  const isCDN = url.startsWith('https://unpkg.com');
 
   if (isCDN) {
     // CDN: キャッシュ優先
@@ -66,32 +47,23 @@ self.addEventListener('fetch', event => {
         });
       })
     );
-  } else if (isLocal) {
-    // ローカル: ネットワーク優先（常に最新を取得）
-    event.respondWith(
-      fetch(event.request, { cache: 'no-cache' })
-        .then(response => {
-          if (response && response.status === 200) {
-            const clone = response.clone();
-            caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
-          }
-          return response;
-        })
-        .catch(() => {
-          return caches.match(event.request).then(cached => {
-            if (cached) return cached;
-            if (event.request.mode === 'navigate') {
-              return caches.match(BASE + 'index.html');
-            }
-          });
-        })
-    );
   } else {
-    // その他: キャッシュ優先
+    // ローカルファイル: ネットワーク優先（localStorageを守る）
     event.respondWith(
-      caches.match(event.request).then(cached => {
-        if (cached) return cached;
-        return fetch(event.request).catch(() => {});
+      fetch(event.request).then(response => {
+        if (response && response.status === 200) {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+        }
+        return response;
+      }).catch(() => {
+        // オフライン時のみキャッシュから返す
+        return caches.match(event.request).then(cached => {
+          if (cached) return cached;
+          if (event.request.mode === 'navigate') {
+            return caches.match(BASE + 'index.html');
+          }
+        });
       })
     );
   }
