@@ -61,18 +61,58 @@
     ];
     function getLevelDef(key) { return LEVELS.find(l => l.key === key) || null; }
 
-    // ─── Storage (localStorage) ──────────────────────────────────────────────
-    const STORAGE_KEYS = { texts: 'er_texts', words: 'er_words' };
+    // ─── Storage (IndexedDB) ─────────────────────────────────────────────────
+    const DB_NAME = 'er_reader_db';
+    const DB_VERSION = 1;
+    const STORE_TEXTS = 'er_texts';
+    const STORE_WORDS = 'er_words';
 
-    function loadFromStorage(key, fallback) {
-      try {
-        const raw = localStorage.getItem(key);
-        return raw ? JSON.parse(raw) : fallback;
-      } catch { return fallback; }
+    function openDB() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, DB_VERSION);
+        req.onupgradeneeded = e => {
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains(STORE_TEXTS)) db.createObjectStore(STORE_TEXTS, { keyPath: 'id' });
+          if (!db.objectStoreNames.contains(STORE_WORDS)) db.createObjectStore(STORE_WORDS, { keyPath: 'id' });
+        };
+        req.onsuccess = e => resolve(e.target.result);
+        req.onerror = e => reject(e.target.error);
+      });
     }
 
-    function saveToStorage(key, data) {
-      try { localStorage.setItem(key, JSON.stringify(data)); } catch {}
+    function idbGetAll(db, storeName) {
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(storeName, 'readonly');
+        const req = tx.objectStore(storeName).getAll();
+        req.onsuccess = e => resolve(e.target.result || []);
+        req.onerror = e => reject(e.target.error);
+      });
+    }
+
+    function idbSaveAll(db, storeName, items) {
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(storeName, 'readwrite');
+        const store = tx.objectStore(storeName);
+        store.clear();
+        items.forEach(item => store.put(item));
+        tx.oncomplete = () => resolve();
+        tx.onerror = e => reject(e.target.error);
+      });
+    }
+
+    // localStorage → IndexedDB マイグレーション（初回のみ）
+    async function migrateFromLocalStorage(db) {
+      const migrated = localStorage.getItem('er_idb_migrated');
+      if (migrated) return;
+      try {
+        const rawTexts = localStorage.getItem('er_texts');
+        const rawWords = localStorage.getItem('er_words');
+        const texts = rawTexts ? JSON.parse(rawTexts) : [];
+        const words = rawWords ? JSON.parse(rawWords) : [];
+        if (texts.length > 0) await idbSaveAll(db, STORE_TEXTS, texts);
+        if (words.length > 0) await idbSaveAll(db, STORE_WORDS, words);
+        localStorage.setItem('er_idb_migrated', '1');
+      } catch(e) { console.warn('migration error', e); }
     }
 
     // ─── Utility ────────────────────────────────────────────────────────────
@@ -1737,12 +1777,34 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
       const [wordDialog, setWordDialog] = useState(null);
       const [history, setHistory] = useState([]); // 履歴スタック [{screen, activeId}]
 
-      const [texts, setTexts] = useState(() => loadFromStorage(STORAGE_KEYS.texts, []));
-      const [words, setWords] = useState(() => loadFromStorage(STORAGE_KEYS.words, []));
+      const [texts, setTexts] = useState([]);
+      const [words, setWords] = useState([]);
+      const [loading, setLoading] = useState(true);
+      const dbRef = useRef(null);
 
-      // localStorage同期
-      useEffect(() => saveToStorage(STORAGE_KEYS.texts, texts), [texts]);
-      useEffect(() => saveToStorage(STORAGE_KEYS.words, words), [words]);
+      // IndexedDB初期化・マイグレーション・データ読み込み
+      useEffect(() => {
+        (async () => {
+          try {
+            const db = await openDB();
+            dbRef.current = db;
+            await migrateFromLocalStorage(db);
+            const [loadedTexts, loadedWords] = await Promise.all([
+              idbGetAll(db, STORE_TEXTS),
+              idbGetAll(db, STORE_WORDS),
+            ]);
+            loadedTexts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+            loadedWords.sort((a, b) => new Date(b.registeredAt) - new Date(a.registeredAt));
+            setTexts(loadedTexts);
+            setWords(loadedWords);
+          } catch(e) { console.error('DB init error', e); }
+          setLoading(false);
+        })();
+      }, []);
+
+      // IndexedDB同期
+      useEffect(() => { if (dbRef.current && !loading) idbSaveAll(dbRef.current, STORE_TEXTS, texts); }, [texts]);
+      useEffect(() => { if (dbRef.current && !loading) idbSaveAll(dbRef.current, STORE_WORDS, words); }, [words]);
 
       const nav = (target, id) => {
         if (id) {
@@ -1836,7 +1898,7 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
         <div style={{ minHeight:'100vh', background:C.bg, fontFamily:"'Georgia','Hiragino Mincho ProN','Yu Mincho',serif", color:C.dark }}>
           {/* Header */}
           <header style={{ background:C.dark, color:'#f5f0e8', padding:'0 20px', display:'flex', alignItems:'center', justifyContent:'space-between', height:54, position:'sticky', top:0, zIndex:100, boxShadow:'0 2px 12px rgba(0,0,0,0.3)' }}>
-            <span style={{ fontSize:16, letterSpacing:'0.1em' }}><span style={{ color:C.gold }}>ER</span> English Reader <span style={{ fontSize:10, color:C.muted, letterSpacing:'0.05em' }}>v2.10.0</span></span>
+            <span style={{ fontSize:16, letterSpacing:'0.1em' }}><span style={{ color:C.gold }}>ER</span> English Reader <span style={{ fontSize:10, color:C.muted, letterSpacing:'0.05em' }}>v2.11.0</span></span>
             <nav style={{ display:'flex', gap:2 }}>
               {navItems.map(({ key, label, Icon }) => (
                 <button key={key}
@@ -1850,20 +1912,26 @@ barrier: 記録や達成が困難とされる「限界・基準」を比喩的�
 
           {/* Main */}
           <main style={{ maxWidth:860, margin:'0 auto', padding:'24px 16px 80px' }}>
-            {screen==='home'   && <HomeScreen texts={texts} words={words} onNav={nav} />}
-            {screen==='import' && <ImportScreen onSave={saveText} onNav={nav} />}
-            {screen==='list'   && <ListScreen texts={texts} onNav={nav} onDelete={deleteText} />}
-            {screen==='reader' && activeText && (
+            {loading && (
+              <div style={{ textAlign:'center', padding:60, color:C.muted, fontSize:14 }}>
+                <div style={{ fontSize:32, marginBottom:12 }}>📖</div>
+                読み込み中…
+              </div>
+            )}
+            {!loading && screen==='home'   && <HomeScreen texts={texts} words={words} onNav={nav} />}
+            {!loading && screen==='import' && <ImportScreen onSave={saveText} onNav={nav} />}
+            {!loading && screen==='list'   && <ListScreen texts={texts} onNav={nav} onDelete={deleteText} />}
+            {!loading && screen==='reader' && activeText && (
               <ReaderScreen text={activeText} onOpenAnalysis={i=>setAnalysisIdx(i)} onRegisterWord={(w,s,t)=>setWordDialog({word:w,sourceSentence:s,type:t||'word'})} onQuickRegister={quickSaveWord} onImportJson={mergeJsonAnalysis} onUpdateLevel={updateTextLevel} registeredWords={words} />
             )}
-            {screen==='reader' && !activeText && (
+            {!loading && screen==='reader' && !activeText && (
               <div style={{ ...card, textAlign:'center', padding:40, color:C.muted }}>
                 <div style={{ fontSize:32, marginBottom:12 }}>📄</div>
                 <div style={{ fontSize:14, marginBottom:20 }}>英文が見つかりません。</div>
                 <button style={btn.primary} onClick={() => nav('list')}>一覧に戻る</button>
               </div>
             )}
-            {screen==='vocab'  && <VocabScreen words={words} onUpdate={updateWord} onDelete={deleteWord} />}
+            {!loading && screen==='vocab'  && <VocabScreen words={words} onUpdate={updateWord} onDelete={deleteWord} />}
           </main>
 
           {/* Modals */}
