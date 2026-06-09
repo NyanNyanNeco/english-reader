@@ -1,24 +1,38 @@
 {
-  "name": "家族のレシピ帳",
-  "short_name": "レシピ帳",
-  "description": "家族みんなのレシピを管理・共有するアプリ",
+  "name": "English Reader — 英語長文解説・単語帳",
+  "short_name": "ER Reader",
+  "description": "英文を文単位で精読し、構文解説と和訳を管理するツール",
   "start_url": "./",
   "display": "standalone",
-  "background_color": "#fdf8f0",
-  "theme_color": "#f0a030",
+  "orientation": "portrait-primary",
+  "background_color": "#1a1410",
+  "theme_color": "#1a1410",
   "lang": "ja",
   "icons": [
     {
-      "src": "icon-192.png",
+      "src": "./icon192.png",
       "sizes": "192x192",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
     },
     {
-      "src": "icon-512.png",
+      "src": "./icon192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "./icon512.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "./icon512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
-  ]
+  ],
+  "categories": ["education", "productivity"]
 }
